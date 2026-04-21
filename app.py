@@ -1,7 +1,7 @@
 """
-Unified Trading Bot v1.2.0
+Unified Trading Bot v1.2.1
 UPRO Trend Bot (70%) + Momentum Rotation Bot (30%)
-원본 매매 로직(지정가 주문, Bot 텔레그램, 긴급매도) 완전 복원
+JSON 읽기 에러 수정 및 원본 로직 완전 유지 버전
 """
 
 import os
@@ -183,7 +183,17 @@ def get_market_data():
 # ==============================================================
 
 def get_upro_signal(spy_close, monthly, vix_close):
-    state = json.load(open(STATE_FILE, 'r')) if os.path.exists(STATE_FILE) else {"in_market": True, "last_exit_price": 0}
+    # [FIX] JSONDecodeError 방지를 위해 파일 읽기 예외처리 보강
+    state = {"in_market": True, "last_exit_price": 0}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                content = f.read().strip()
+                if content:
+                    state = json.loads(content)
+        except:
+            pass
+        
     if spy_close.empty or len(spy_close) < 20:
         return "WAIT", "Loading", 0.0, state
 
@@ -220,10 +230,13 @@ def load_rotation_state():
     default = {"in_market": False, "holdings": [], "entry_date": None, "consecutive_loss": 0}
     if os.path.exists(ROTATION_STATE_FILE):
         try:
-            saved = json.load(open(ROTATION_STATE_FILE))
-            for k, v in default.items():
-                if k not in saved: saved[k] = v
-            return saved
+            with open(ROTATION_STATE_FILE, 'r') as f:
+                content = f.read().strip()
+                if content:
+                    saved = json.loads(content)
+                    for k, v in default.items():
+                        if k not in saved: saved[k] = v
+                    return saved
         except: pass
     return default
 
@@ -307,20 +320,21 @@ def calc_upro_performance(df):
         equity *= (1 + ret / 100)
         equity_curve.append({"date": str(sells.loc[i, 'Date'].date()), "equity": round(equity, 2)})
     if not trades: return empty
-    wins   = [r for r in trades if r > 0]
-    losses = [r for r in trades if r <= 0]
+    rets = trades
+    wins   = [r for r in rets if r > 0]
+    losses = [r for r in rets if r <= 0]
     eq_vals = [e['equity'] for e in equity_curve]
     peak, mdd = eq_vals[0], 0.0
     for v in eq_vals:
         if v > peak: peak = v
         dd = (peak - v) / peak * 100
         if dd > mdd: mdd = dd
-    sharpe = round(np.mean(trades) / (np.std(trades) + 1e-9) * np.sqrt(12), 2) if len(trades) > 1 else 0.0
-    return {"total_return": round(equity - 100, 2), "win_rate": round(len(wins)/len(trades)*100, 1),
-            "mdd": round(mdd, 2), "sharpe": sharpe, "total_trades": len(trades), "win_trades": len(wins), 
+    sharpe = round(np.mean(rets) / (np.std(rets) + 1e-9) * np.sqrt(12), 2) if len(rets) > 1 else 0.0
+    return {"total_return": round(equity - 100, 2), "win_rate": round(len(wins)/len(rets)*100, 1),
+            "mdd": round(mdd, 2), "sharpe": sharpe, "total_trades": len(rets), "win_trades": len(wins), 
             "loss_trades": len(losses), "avg_profit": round(np.mean(wins), 2) if wins else 0.0,
-            "avg_loss": round(np.mean(losses), 2) if losses else 0.0, "best_trade": round(max(trades), 2) if trades else 0.0,
-            "worst_trade": round(min(trades), 2) if trades else 0.0, "equity_curve": equity_curve}
+            "avg_loss": round(np.mean(losses), 2) if losses else 0.0, "best_trade": round(max(rets), 2) if rets else 0.0,
+            "worst_trade": round(min(rets), 2) if rets else 0.0, "equity_curve": equity_curve}
 
 def calc_rotation_performance(df):
     empty = {"total_return": 0.0, "win_rate": 0.0, "mdd": 0.0, "sharpe": 0.0,
@@ -560,7 +574,7 @@ def run_dashboard():
             if not df_upro.empty: st.dataframe(df_upro.tail(20).iloc[::-1], use_container_width=True, hide_index=True)
             else: st.info("기록 없음")
         with col2:
-            st.caption("Rotation 봇")
+            st.caption("Rotation bot")
             if not df_rot.empty: st.dataframe(df_rot.tail(20).iloc[::-1], use_container_width=True, hide_index=True)
             else: st.info("기록 없음")
 
