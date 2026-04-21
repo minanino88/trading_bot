@@ -394,7 +394,7 @@ async def run_trading():
     if spy_ohlc.empty: return
     spy_close, today = spy_ohlc['Close'], dt.now(KST).strftime('%Y-%m-%d')
 
-    if now_kst.hour == 19:
+    if now_kst.hour == 20:
         # [A] UPRO
         u_sig, u_re, u_p, u_st = get_upro_signal(spy_close, monthly, vix_close)
         u_qty, u_curr_p, u_msg = trader.get_holdings_qty(TRADE_TICKER), trader.get_current_price(TRADE_TICKER), ""
