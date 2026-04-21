@@ -1,7 +1,4 @@
-“””
-Unified Trading Bot v1.2.1
-UPRO Trend Bot (70%) + Momentum Rotation Bot (30%)
-“””
+
 
 import os
 import json
