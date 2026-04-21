@@ -144,30 +144,26 @@ class KIS_Trader:
     def send_order(self, ticker, qty, side="BUY"):
         if not self.token: return {"rt_cd": "1", "msg1": "No Token"}
         try:
-            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
+            url   = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
             tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
             
-            # 현재가를 가져와서 지정가로 응찰 (시장가 에러 방지)
             curr_p = self.get_current_price(ticker)
             if curr_p <= 0: return {"rt_cd": "1", "msg1": "Price Fetch Fail"}
-            
-            # 매수 시 현재가+1% (최우선 체결), 매도 시 현재가-1%
-            ord_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
+            order_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
             
             data = {
                 "CANO":            self.cano,
                 "ACNT_PRDT_CD":    self.acnt_prdt_cd,
-                "OVRS_EXCG_CD":    "AMEX",  # NYSE Arca 대응 (UPRO 필수)
+                "OVRS_EXCG_CD":    "AMEX",
                 "PDNO":            ticker,
                 "ORD_QTY":         str(int(float(qty))),
-                "OVRS_ORD_UNPR":   f"{ord_p:.2f}", # 시장가 "0" 대신 실제 가격 전송
+                "OVRS_ORD_UNPR":   f"{order_p:.2f}", # 현재가 ±1% 가격 전송
                 "ORD_SVR_DVSN_CD": "0",
                 "ORD_DVSN":        "00", # 지정가 응찰
             }
             res = requests.post(url, headers=self._headers(tr_id), data=json.dumps(data)).json()
             return res
-        except Exception as e:
-            return {"rt_cd": "1", "msg1": str(e)}
+        except Exception as e: return {"rt_cd": "1", "msg1": str(e)}
 
 
 # ==============================================================
@@ -389,7 +385,7 @@ def ask_gemini(u_sig, r_sig):
     if not api_key: return "GEMINI_API_KEY 미설정"
     try:
         genai.configure(api_key=api_key)
-        model  = genai.GenerativeModel("models/gemini-1.5-flash")
+        model  = genai.GenerativeModel("gemini-1.5-flash")
         prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}, VIX {r_sig.get('vix_now')}. Korean 150자: 1.시장평가 2.리스크")
         return model.generate_content(prompt).text.strip()
     except Exception as e: return f"Gemini 오류: {str(e)[:60]}"
