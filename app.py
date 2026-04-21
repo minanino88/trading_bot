@@ -388,19 +388,29 @@ def calc_rotation_performance(df):
 # ==============================================================
 
 def ask_gemini(u_sig, r_sig):
-    if not GEMINI_OK or not os.getenv("GEMINI_API_KEY"): return "AI 분석 생략"
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key: return "API 키 없음"
+    
+    # [핵심] 라이브러리 버그를 피하기 위해 REST API로 직접 통신합니다.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
+    prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
+              "Korean 150자 내외: 1.시장평가 2.리스크 대응")
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+
     try:
-        # [수정] transport='rest'를 추가하여 404 에러 방지
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"), transport='rest')
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
-                  "Korean 150자: 1.시장평가 2.리스크")
-        
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        res_json = res.json()
+        # 결과값에서 텍스트만 추출
+        answer = res_json['candidates'][0]['content']['parts'][0]['text']
+        return answer.strip()
     except Exception as e:
-        return f"AI 연결 지연 (에러내용: {str(e)[:50]})"
+        # 에러 발생 시 구체적인 원인을 텔레그램으로 보냅니다.
+        return f"AI 분석 일시 지연 (원인: {str(e)[:30]})"
+
 
 
 
@@ -486,6 +496,10 @@ async def run_trading():
                     if res.get('rt_cd') == '0':
                         msgs.append(f"✅ ROT 매수: {t} ({qty}주)")
                         new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+                    else:
+                        # [중요] 실패하면 텔레그램에 이유를 뱉어내게 합니다.
+                        msgs.append(f"❌ ROT 매수실패({t}): {res.get('msg1')}")
+
             
             if new_h:
                 rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
