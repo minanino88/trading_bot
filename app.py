@@ -391,25 +391,26 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     
-    # [핵심] 라이브러리 버그를 피하기 위해 REST API로 직접 통신합니다.
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
-    
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
-        # 결과값에서 텍스트만 추출
-        answer = res_json['candidates'][0]['content']['parts'][0]['text']
-        return answer.strip()
+        
+        # [수정] 응답 구조 확인 절차 강화
+        if 'candidates' in res_json and len(res_json['candidates']) > 0:
+            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+        elif 'error' in res_json:
+            return f"AI 에러: {res_json['error'].get('message', 'Unknown')}"
+        else:
+            return "AI 분석 일시 지연 (응답 구조 이상)"
     except Exception as e:
-        # 에러 발생 시 구체적인 원인을 텔레그램으로 보냅니다.
-        return f"AI 분석 일시 지연 (원인: {str(e)[:30]})"
+        return f"AI 분석 실패 (원인: {str(e)[:20]})"
+
 
 
 
@@ -471,23 +472,24 @@ async def run_trading():
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": qty_upro, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         else: msgs.append(f"UPRO: {u_sig} ({u_re})")
 
-        # [B] Rotation 봇 (실제 주문 로직 추가)
+        # [B] Rotation 봇 (매도 로직 & 상태 보고 완결)
         action, top2, rot_budget = r_sig['action'], r_sig['top2'], bal * ROTATION_RATIO
         print(f"[ROT] action={action}, top2={top2}")
 
         if action in ["ENTER", "ROTATE"]:
-            # 1. 기존 종목 청산
+            # 1. 기존 종목 전량 청산 (교체 매매의 핵심)
             if rot_state['in_market']:
-                for h in rot_state['holdings']:
+                for h in rot_state.get('holdings', []):
                     qty_h = trader.get_holdings(h['ticker'])
                     if qty_h > 0:
                         res = trader.send_order(h['ticker'], qty_h, "SELL")
                         if res.get('rt_cd') == '0':
-                            msgs.append(f"✅ ROT 매도: {h['ticker']}")
-                time.sleep(2) # 서버 과부하 방지
+                            msgs.append(f"✅ ROT 매도(교체): {h['ticker']}")
+                time.sleep(2) # 한투 API 연사 제한 방지
 
-            # 2. 신규 종목 매수 (이 코드가 빠져있었습니다!)
-            new_h, per_stock = [], (rot_budget * 0.95) / len(top2) if top2 else 0
+            # 2. 신규 종목 매수
+            new_h = []
+            per_stock = (rot_budget * 0.95) / len(top2) if top2 else 0
             for t in top2:
                 p = trader.get_current_price(t)
                 qty = int(per_stock / p) if p > 0 else 0
@@ -497,22 +499,32 @@ async def run_trading():
                         msgs.append(f"✅ ROT 매수: {t} ({qty}주)")
                         new_h.append({"ticker": t, "qty": qty, "entry_price": p})
                     else:
-                        # [중요] 실패하면 텔레그램에 이유를 뱉어내게 합니다.
-                        msgs.append(f"❌ ROT 매수실패({t}): {res.get('msg1')}")
-
+                        msgs.append(f"❌ ROT 실패({t}): {res.get('msg1')}")
             
             if new_h:
                 rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
                 save_rotation_state(rot_state)
         
-        elif action == "EXIT" and rot_state['in_market']:
-            # (청산 로직 동일하게 적용)
-            for h in rot_state['holdings']:
-                qty_h = trader.get_holdings(h['ticker'])
-                if qty_h > 0: trader.send_order(h['ticker'], qty_h, "SELL")
-            rot_state.update({"in_market": False, "holdings": []})
-            save_rotation_state(rot_state)
-            msgs.append("✅ ROT 청산 완료")
+        elif action == "KEEP":
+            # 보유 중일 때 침묵 방지
+            hold_list = [h['ticker'] for h in rot_state.get('holdings', [])]
+            msgs.append(f"💎 ROT 유지: {', '.join(hold_list) if hold_list else '보유 종목 없음'}")
+            
+        elif action == "WAIT":
+            msgs.append(f"⏳ ROT 관망: 시장 조건 미달 (VIX: {r_sig.get('vix_now', 0):.1f})")
+
+        elif action == "EXIT":
+            # 🚨 2번 질문 주신 부분: EXIT 시 실제 매도 실행
+            if rot_state['in_market']:
+                for h in rot_state.get('holdings', []):
+                    qty_h = trader.get_holdings(h['ticker'])
+                    if qty_h > 0:
+                        res = trader.send_order(h['ticker'], qty_h, "SELL")
+                        if res.get('rt_cd') == '0':
+                            msgs.append(f"✅ ROT 청산 매도: {h['ticker']}")
+                rot_state.update({"in_market": False, "holdings": []})
+                save_rotation_state(rot_state)
+            msgs.append("🚨 ROT 모든 포지션 정리 완료")
 
         
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
