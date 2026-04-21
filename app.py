@@ -391,30 +391,26 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     
-    # [2026년 최신] gemini-1.5-flash 대신 gemini-3-flash를 사용합니다.
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-flash:generateContent?key={api_key}"
+    # [2026년 최신] 가장 안정적인 v1beta 주소와 flash 모델명 사용
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
-    
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
         
-        if 'candidates' in res_json:
+        # 응답 구조 확인 (candidates가 있으면 텍스트 반환)
+        if 'candidates' in res_json and len(res_json['candidates']) > 0:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        else:
-            # 모델을 못 찾는 에러가 나면 하위 호환용 모델로 재시도
-            fallback_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={api_key}"
-            res = requests.post(fallback_url, headers=headers, json=payload, timeout=10)
-            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        elif 'error' in res_json:
+            # 에러 발생 시 구체적인 메시지 확인
+            return f"AI 연결 지연 ({res_json['error'].get('message', 'Config Error')})"
+        return "AI 분석 일시 지연"
     except Exception as e:
-        return f"AI 서비스 일시 지연 (주문 로직은 영향 없음)"
-
-
-
+        return f"AI 연결 실패 (원인: {str(e)[:20]})"
 
 
 
