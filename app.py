@@ -389,10 +389,11 @@ def calc_rotation_performance(df):
 
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "API 키 없음"
+    if not api_key: return "API 키 누락"
     
-    # [2026년 최신] 가장 안정적인 v1beta 주소와 flash 모델명 사용
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # [해결책] 404를 피하기 위해 모델명을 'gemini-1.5-flash-latest'로 강제 지정합니다.
+    # 주소도 가장 호환성이 좋은 v1beta를 사용합니다.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
@@ -402,15 +403,14 @@ def ask_gemini(u_sig, r_sig):
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
         
-        # 응답 구조 확인 (candidates가 있으면 텍스트 반환)
-        if 'candidates' in res_json and len(res_json['candidates']) > 0:
+        if 'candidates' in res_json:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        elif 'error' in res_json:
-            # 에러 발생 시 구체적인 메시지 확인
-            return f"AI 연결 지연 ({res_json['error'].get('message', 'Config Error')})"
-        return "AI 분석 일시 지연"
+        
+        # 404 에러나 모델 미지원 시 에러 메시지 상세 보고
+        error_msg = res_json.get('error', {}).get('message', 'Unknown Error')
+        return f"AI 지연 ({error_msg})"
     except Exception as e:
-        return f"AI 연결 실패 (원인: {str(e)[:20]})"
+        return f"AI 연결 실패: {str(e)[:20]}"
 
 
 
@@ -515,6 +515,10 @@ async def run_trading():
                         pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                     else:
                         msgs.append(f"❌ ROT 실패({t}): {res.get('msg1')}")
+                else:
+                    # [핵심 추가] 돈이 모자랄 때 텔레그램에 이유를 보고합니다.
+                    msgs.append(f"⚠️ ROT 매수불가({t}): 주가(${p})가 할당예산(${per_stock:.1f})보다 비쌈")
+
             
             if new_h:
                 rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
