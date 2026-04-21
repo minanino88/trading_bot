@@ -151,19 +151,26 @@ class KIS_Trader:
             if curr_p <= 0: return {"rt_cd": "1", "msg1": "Price Fetch Fail"}
             order_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
             
+            # [핵심 수정] 종목별 거래소 자동 매핑
+            # UPRO, SPY는 AMEX / 나머지는 NASD (나스닥)
+            exch_cd = "AMEX" if ticker in ["UPRO", "SPY"] else "NASD"
+            
             data = {
                 "CANO":            self.cano,
                 "ACNT_PRDT_CD":    self.acnt_prdt_cd,
-                "OVRS_EXCG_CD":    "AMEX",
+                "OVRS_EXCG_CD":    exch_cd, # 자동 매핑된 코드 사용
                 "PDNO":            ticker,
                 "ORD_QTY":         str(int(float(qty))),
-                "OVRS_ORD_UNPR":   f"{order_p:.2f}", # 현재가 ±1% 가격 전송
+                "OVRS_ORD_UNPR":   f"{order_p:.2f}",
                 "ORD_SVR_DVSN_CD": "0",
-                "ORD_DVSN":        "00", # 지정가 응찰
+                "ORD_DVSN":        "00",
             }
             res = requests.post(url, headers=self._headers(tr_id), data=json.dumps(data)).json()
+            # 로그를 봐야 왜 실패했는지 알 수 있으니 아래 줄을 다시 추가하세요!
+            print(f"[KIS] {side} {ticker} {qty}주 -> rt_cd={res.get('rt_cd')} msg={res.get('msg1')}")
             return res
         except Exception as e: return {"rt_cd": "1", "msg1": str(e)}
+
 
 
 # ==============================================================
@@ -380,15 +387,20 @@ def calc_rotation_performance(df):
 # ==============================================================
 
 def ask_gemini(u_sig, r_sig):
-    if not GEMINI_OK: return "Gemini SDK 미설치"
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "GEMINI_API_KEY 미설정"
+    if not GEMINI_OK or not os.getenv("GEMINI_API_KEY"): return "AI 분석 생략"
     try:
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"), transport='rest')
-        model  = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}, VIX {r_sig.get('vix_now')}. Korean 150자: 1.시장평가 2.리스크")
-        return model.generate_content(prompt).text.strip()
-    except Exception as e: return f"Gemini 오류: {str(e)[:60]}"
+        # transport='rest'를 제거하고 가장 표준적인 방식으로 호출
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
+                  "Korean 150자: 1.시장평가 2.리스크")
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"AI 연결 지연 (에러내용: {str(e)[:50]})"
+
 
 async def tg_send(bot, chat_id, text):
     if not bot or not chat_id:
