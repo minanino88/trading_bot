@@ -447,34 +447,45 @@ async def run_trading():
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": qty_upro, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         else: msgs.append(f"UPRO: {u_sig} ({u_re})")
 
-        # [B] Rotation
+        # [B] Rotation 봇 (실제 주문 로직 추가)
         action, top2, rot_budget = r_sig['action'], r_sig['top2'], bal * ROTATION_RATIO
+        print(f"[ROT] action={action}, top2={top2}")
+
         if action in ["ENTER", "ROTATE"]:
+            # 1. 기존 종목 청산
             if rot_state['in_market']:
                 for h in rot_state['holdings']:
-                    qty_h, cur_p_h = trader.get_holdings(h['ticker']), trader.get_current_price(h['ticker'])
+                    qty_h = trader.get_holdings(h['ticker'])
                     if qty_h > 0:
-                        trader.send_order(h['ticker'], qty_h, "SELL")
-                        ret = (cur_p_h - h.get('entry_price', cur_p_h)) / max(h.get('entry_price', cur_p_h), 1) * 100
-                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": qty_h, "Price": cur_p_h, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-            time.sleep(2)
-            new_h, per_stock = [], rot_budget / len(top2) if top2 else 0
+                        res = trader.send_order(h['ticker'], qty_h, "SELL")
+                        if res.get('rt_cd') == '0':
+                            msgs.append(f"✅ ROT 매도: {h['ticker']}")
+                time.sleep(2) # 서버 과부하 방지
+
+            # 2. 신규 종목 매수 (이 코드가 빠져있었습니다!)
+            new_h, per_stock = [], (rot_budget * 0.95) / len(top2) if top2 else 0
             for t in top2:
                 p = trader.get_current_price(t)
-                qty = int((per_stock * 0.95) / p) if p > 0 else 0
-                if qty >= 1 and trader.send_order(t, qty, "BUY").get('rt_cd') == '0':
-                    new_h.append({"ticker": t, "qty": qty, "entry_price": p})
-                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-            rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
-            save_rotation_state(rot_state)
-            msgs.append(f"✅ ROT 교체: {top2}")
+                qty = int(per_stock / p) if p > 0 else 0
+                if qty >= 1:
+                    res = trader.send_order(t, qty, "BUY")
+                    if res.get('rt_cd') == '0':
+                        msgs.append(f"✅ ROT 매수: {t} ({qty}주)")
+                        new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+            
+            if new_h:
+                rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
+                save_rotation_state(rot_state)
+        
         elif action == "EXIT" and rot_state['in_market']:
+            # (청산 로직 동일하게 적용)
             for h in rot_state['holdings']:
-                qty_h, cur_p_h = trader.get_holdings(h['ticker']), trader.get_current_price(h['ticker'])
+                qty_h = trader.get_holdings(h['ticker'])
                 if qty_h > 0: trader.send_order(h['ticker'], qty_h, "SELL")
             rot_state.update({"in_market": False, "holdings": []})
             save_rotation_state(rot_state)
             msgs.append("✅ ROT 청산 완료")
+
         
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
         await tg_send(bot, chat_id, "\n".join(msgs))
