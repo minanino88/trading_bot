@@ -24,10 +24,11 @@ except ImportError:
     Bot = None
 
 try:
-    import google.generativeai as genai
+    from google import genai
     GEMINI_OK = True
 except ImportError:
     GEMINI_OK = False
+
 
 warnings.filterwarnings('ignore')
 
@@ -281,11 +282,12 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state):
 def ask_gemini(u_sig, r_sig):
     if not GEMINI_OK or not os.getenv("GEMINI_API_KEY"): return "AI분석 스킵"
     try:
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         p = f"UPRO {u_sig}, ROT {r_sig['action']}, TOP2 {r_sig.get('top2')}. Korean 150 chars."
-        return model.generate_content(p).text.strip()
+        res = client.models.generate_content(model="gemini-1.5-flash", contents=p)
+        return res.text.strip()
     except: return "AI분석 실패"
+
 
 # ==============================================================
 # 6. 성과 분석
