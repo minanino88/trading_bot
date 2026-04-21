@@ -389,25 +389,36 @@ def calc_rotation_performance(df):
 
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "API 키 없음"
+    if not api_key: return "API 키 누락"
     
-    # 2026년 표준 모델명인 gemini-2.0-flash를 사용하고 v1beta 경로로 접속합니다.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    # [2026년 표준] v1beta 대신 v1 정식 엔드포인트를 사용합니다.
+    # 모델명에서 -latest를 제거한 가장 안정적인 식별자를 씁니다.
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
-    prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
-              "Korean 150자 내외: 1.시장평가 2.리스크 대응")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    # 시장 상황에 따른 프롬프트 구성
+    prompt = (f"UPRO 신호: {u_sig}, ROT 액션: {r_sig.get('action')}. "
+              "한국어 150자 내외로 전문적인 투자 리스크와 대응 전략을 요약해줘.")
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 300, "temperature": 0.7}
+    }
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
-        if 'candidates' in res_json:
+        
+        # 성공 시 텍스트 추출
+        if res.status_code == 200 and 'candidates' in res_json:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        else:
-            # 404가 날 경우를 대비해 실제 에러 원인을 텔레그램에 찍습니다.
-            return f"AI 지연({res.status_code}): {res_json.get('error', {}).get('message', 'Model Error')[:30]}"
-    except:
-        return "AI 연결 실패"
+        
+        # 404 등 에러 발생 시 원인을 정확히 로그에 찍어 다음 조치를 가능하게 합니다.
+        err_msg = res_json.get('error', {}).get('message', 'Unknown Error')
+        return f"AI 지연 (Error {res.status_code}: {err_msg[:40]})"
+        
+    except Exception as e:
+        return f"AI 연결 실패: {str(e)[:20]}"
 
 
 
@@ -439,6 +450,10 @@ async def run_trading():
     bot = Bot(token=token_v) if (Bot and token_v) else None
     trader = KIS_Trader()
 
+    # [MISSING-1] 환경변수 체크 로그 (실행 시 설정 오류 확인용)
+    print(f"[ENV] TG_TOKEN={'OK' if token_v else 'MISSING'} | KIS_KEY={'OK' if os.getenv('KIS_APPKEY') else 'MISSING'}")
+    print(f"[ENV] GEMINI_KEY={'OK' if os.getenv('GEMINI_API_KEY') else 'MISSING'}")
+
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
     if spy_ohlc.empty:
         await tg_send(bot, chat_id, f"⚠️ 데이터 로드 실패: {d_msg}")
@@ -448,14 +463,18 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state)
 
-    # 20시 정규 매매 (현재 0시 테스트 중이면 0 유지)
-    if current_hour == 7:
+    # [MISSING-1] 현재 신호 상태 로그
+    print(f"[SIG] UPRO={u_sig}({u_re}) | ROT={r_sig['action']} | TOP={r_sig['top2']}")
+    print(f"[SIG] VIX={r_sig['vix_now']:.1f} | SPY 6M={r_sig['spy_6m']*100:+.1f}%")
+
+    # ------------------------------------------------------
+    # 1. 정규 매매 섹션 (사용자 설정 시간에 실행)
+    # ------------------------------------------------------
+    if current_hour == 7: # 민환님 설정에 따라 0 또는 7로 조정
         bal = trader.get_balance()
         msgs = [f"🤖 <b>통합봇 정규매매 [{now_kst.strftime('%m/%d %H:%M')} KST]</b>", f"잔고: ${bal:,.2f}"]
         
-        # ------------------------------------------------------
-        # [A] UPRO 섹션 (실행 + 로그 + 보고)
-        # ------------------------------------------------------
+        # [A] UPRO 섹션
         upro_budget, cur_p_upro = bal * UPRO_RATIO, trader.get_current_price(TRADE_TICKER)
         qty_upro = trader.get_holdings(TRADE_TICKER)
         
@@ -466,7 +485,6 @@ async def run_trading():
                 if res.get('rt_cd') == '0':
                     msgs.append(f"✅ UPRO 매수: {buy_qty}주")
                     with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
-                    # CSV 로그 기록 유지
                     pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": buy_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
                 else: msgs.append(f"❌ UPRO 매수실패: {res.get('msg1')}")
         elif u_sig == "EXIT" and qty_upro > 0:
@@ -474,18 +492,12 @@ async def run_trading():
             if res.get('rt_cd') == '0':
                 msgs.append(f"✅ UPRO 매도: {qty_upro}주")
                 with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
-                # CSV 로그 기록 유지
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": qty_upro, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
-        else:
-            msgs.append(f"📈 UPRO 유지 ({u_sig})")
+        else: msgs.append(f"📈 UPRO 유지 ({u_sig})")
 
-        # ------------------------------------------------------
-        # [B] Rotation 섹션 (실행 + 로그 + 보고)
-        # ------------------------------------------------------
+        # [B] Rotation 섹션
         action, top2, rot_budget = r_sig['action'], r_sig['top2'], bal * ROTATION_RATIO
-        
         if action in ["ENTER", "ROTATE"]:
-            # 1. 기존 종목 청산
             if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
                     qty_h = trader.get_holdings(h['ticker'])
@@ -493,13 +505,12 @@ async def run_trading():
                         res = trader.send_order(h['ticker'], qty_h, "SELL")
                         if res.get('rt_cd') == '0':
                             msgs.append(f"✅ ROT 매도(교체): {h['ticker']}")
-                            # ROT CSV 로그 기록
+                            # 로그 기록
                             cur_p_h = trader.get_current_price(h['ticker'])
                             ret = (cur_p_h - h.get('entry_price', cur_p_h)) / max(h.get('entry_price', cur_p_h), 1) * 100
                             pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": qty_h, "Price": cur_p_h, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                 time.sleep(2)
 
-            # 2. 신규 종목 매수
             new_h, per_stock = [], (rot_budget * 0.95) / len(top2) if top2 else 0
             for t in top2:
                 p = trader.get_current_price(t)
@@ -510,24 +521,19 @@ async def run_trading():
                         msgs.append(f"✅ ROT 매수: {t} ({qty}주)")
                         new_h.append({"ticker": t, "qty": qty, "entry_price": p})
                         pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-                    else:
-                        msgs.append(f"❌ ROT 실패({t}): {res.get('msg1')}")
+                    else: msgs.append(f"❌ ROT 실패({t}): {res.get('msg1')}")
                 else:
-                    # [핵심 추가] 돈이 모자랄 때 텔레그램에 이유를 보고합니다.
-                    msgs.append(f"⚠️ ROT 매수불가({t}): 주가(${p})가 할당예산(${per_stock:.1f})보다 비쌈")
+                    # [돈 부족 알림]
+                    msgs.append(f"⚠️ ROT 매수불가({t}): 주가(${p})가 예산(${per_stock:.1f})보다 비쌈")
 
-            
             if new_h:
                 rot_state.update({"in_market": True, "holdings": new_h, "entry_date": now_kst.strftime("%Y-%m-%d")})
                 save_rotation_state(rot_state)
-        
         elif action == "KEEP":
             hold_list = [h['ticker'] for h in rot_state.get('holdings', [])]
             msgs.append(f"💎 ROT 유지: {', '.join(hold_list) if hold_list else '보유 종목 없음'}")
-            
         elif action == "WAIT":
             msgs.append(f"⏳ ROT 관망 (VIX: {r_sig.get('vix_now', 0):.1f})")
-
         elif action == "EXIT":
             if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
@@ -537,31 +543,62 @@ async def run_trading():
                 save_rotation_state(rot_state)
             msgs.append("🚨 ROT 하락장 대응 전량 청산")
 
-        # AI 분석 호출
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
         await tg_send(bot, chat_id, "\n".join(msgs))
 
-    # (이후 hour 1, 7 로직은 동일)
-
+    # ------------------------------------------------------
+    # 2. 긴급 탈출 섹션 (01시) - [BUG-6 수정 반영]
+    # ------------------------------------------------------
     elif current_hour == 1:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
         if not spy_int.empty:
             if isinstance(spy_int.columns, pd.MultiIndex): spy_int.columns = spy_int.columns.get_level_values(0)
             day_ret = (float(spy_int['Close'].iloc[-1]) / float(spy_int['Open'].iloc[0])) - 1
             if day_ret <= -0.03:
+                # UPRO 청산
                 qty_upro = trader.get_holdings(TRADE_TICKER)
                 if qty_upro > 0: trader.send_order(TRADE_TICKER, qty_upro, "SELL")
-                await tg_send(bot, chat_id, f"🚨 <b>긴급 탈출 실행</b> (SPY {day_ret*100:.1f}%)")
+                # [BUG-6] ROT 청산 로직 추가
+                if rot_state.get('in_market'):
+                    for h in rot_state.get('holdings', []):
+                        qty_h = trader.get_holdings(h['ticker'])
+                        if qty_h > 0: trader.send_order(h['ticker'], qty_h, "SELL")
+                    rot_state.update({"in_market": False, "holdings": []})
+                    save_rotation_state(rot_state)
+                await tg_send(bot, chat_id, f"🚨 <b>긴급 탈출 실행</b> (SPY {day_ret*100:.1f}%) - 전 포지션 정리")
 
+    # ------------------------------------------------------
+    # 3. 아침 리포트 섹션 (07시) - [BUG-5 수정 반영]
+    # ------------------------------------------------------
     elif current_hour == 7:
         bal = trader.get_balance()
-        msg = (f"📋 <b>아침 리포트 [{now_kst.strftime('%m/%d %H:%M')}]</b>\n잔고: ${bal:,.2f}\n"
-               f"SPY 6M: {r_sig['spy_6m']*100:+.1f}% | VIX: {r_sig['vix_now']:.1f}\n🧠 {ask_gemini('morning', r_sig)}")
+        qty_upro = trader.get_holdings(TRADE_TICKER)
+        rot_hold = ", ".join([h['ticker'] for h in rot_state.get('holdings', [])]) or "CASH"
+        
+        msg = (
+            f"📋 <b>아침 리포트 [{now_kst.strftime('%m/%d %H:%M')}]</b>\n"
+            f"잔고: ${bal:,.2f}\n"
+            f"UPRO: {str(qty_upro)+'주' if qty_upro > 0 else 'CASH'}\n"
+            f"ROT: {rot_hold}\n"
+            f"SPY 6M: {r_sig['spy_6m']*100:+.1f}% | VIX: {r_sig['vix_now']:.1f}\n"
+            f"TOP{TOP_N}: {', '.join(r_sig['top2'])}\n"
+            f"🧠 {ask_gemini('morning', r_sig)}"
+        )
         await tg_send(bot, chat_id, msg)
 
+    # ------------------------------------------------------
+    # 4. 수동 테스트 섹션 (그 외 시간) - [BUG-7 수정 반영]
+    # ------------------------------------------------------
     else:
-        # 수동 실행 시 테스트용 알림
-        await tg_send(bot, chat_id, f"🧪 <b>수동 가동 확인</b>\nKST: {now_kst.strftime('%H:%M:%S')}\n잔고: ${trader.get_balance():,.2f}")
+        test_msg = (
+            f"🧪 <b>수동 실행 테스트 [{now_kst.strftime('%m/%d %H:%M')}]</b>\n"
+            f"잔고: ${trader.get_balance():,.2f}\n"
+            f"UPRO 신호: {u_sig} ({u_re})\n"
+            f"ROT 신호: {r_sig['action']} | TOP{TOP_N}: {', '.join(r_sig['top2'])}\n"
+            f"VIX: {r_sig['vix_now']:.1f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n"
+            f"ℹ️ 현재 스케줄 외 시간 — 매매 스킵"
+        )
+        await tg_send(bot, chat_id, test_msg)
 
 # ==============================================================
 # 10. Streamlit 대시보드 (v1.3.0 완전 복구)
@@ -619,6 +656,14 @@ def run_dashboard():
         fig.add_trace(go.Bar(x=spy126.index, y=spy126['Volume'], name="Volume", marker_color="steelblue"), row=3, col=1)
         fig.update_layout(xaxis_rangeslider_visible=False, height=650, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
         st.plotly_chart(fig, use_container_width=True)
+    if r_signal.get('scores'):
+        st.subheader("모멘텀 스코어 (Momentum Scores)")
+        sc_df = pd.DataFrame([
+            {"Ticker": t, "Score": s, "TOP1": "★" if t in r_signal['top2'] else ""}
+            for t, s in sorted(r_signal['scores'].items(), key=lambda x: x[1], reverse=True)
+        ])
+        st.dataframe(sc_df, use_container_width=True, hide_index=True)
+
 
     with tab2:
         for label, perf in [("UPRO 트렌드 봇 (70%)", upro_perf), ("모멘텀 로테이션 봇 (30%)", rot_perf)]:
