@@ -428,7 +428,7 @@ async def run_trading():
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state)
 
     # 20시 정규 매매
-    if current_hour == 20:
+    if current_hour == 23:
         bal = trader.get_balance()
         msgs = [f"🤖 <b>통합봇 정규매매 [{now_kst.strftime('%m/%d %H:%M')} KST]</b>", f"잔고: ${bal:,.2f}"]
         
