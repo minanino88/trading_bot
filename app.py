@@ -391,26 +391,31 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 누락"
     
-    # [해결책] 404를 피하기 위해 모델명을 'gemini-1.5-flash-latest'로 강제 지정합니다.
-    # 주소도 가장 호환성이 좋은 v1beta를 사용합니다.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
+    # [해결책] 404를 피하기 위해 후보 모델 리스트를 순회합니다.
+    # 2026년 환경에서 가장 잘 붙는 순서대로 배치했습니다.
+    models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+    
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {'Content-Type': 'application/json'}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        res_json = res.json()
-        
-        if 'candidates' in res_json:
-            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        
-        # 404 에러나 모델 미지원 시 에러 메시지 상세 보고
-        error_msg = res_json.get('error', {}).get('message', 'Unknown Error')
-        return f"AI 지연 ({error_msg})"
-    except Exception as e:
-        return f"AI 연결 실패: {str(e)[:20]}"
+    for model_name in models:
+        # v1beta 주소가 가장 유연하므로 고정합니다.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=7)
+            res_json = res.json()
+            
+            if 'candidates' in res_json:
+                return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            # 404(Not Found)가 뜨면 다음 모델로 넘어갑니다.
+            continue 
+        except:
+            continue
+
+    return "AI 분석 일시 지연 (모든 모델 호출 실패)"
+
 
 
 
