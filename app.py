@@ -383,13 +383,25 @@ async def run_trading():
     trader  = KIS_Trader()
     token_v = os.getenv('TELEGRAM_TOKEN')
     chat_id = os.getenv('CHAT_ID')
-    bot     = Bot(token=token_v) if (Bot and token_v) else None
+    bot = Bot(token=token_v) if (Bot and token_v) else None
+    print(f"DEBUG: Bot={bot}, token_v={bool(token_v)}, chat_id={bool(chat_id)}")
+    print(f"DEBUG: GITHUB_ACTIONS={os.getenv('GITHUB_ACTIONS')}")
+    print(f"DEBUG: bal={trader.get_balance()}")
+
 
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
-    if spy_ohlc.empty:
-        if bot: await bot.send_message(chat_id=chat_id, text=f"⚠️ 데이터 로드 실패: {d_msg}")
-        return
+    if spy_ohlc.empty: 
+        if bot:
+            try:
+                await bot.send_message(chat_id=chat_id, text="\n".join(msgs), parse_mode="HTML")
+                print("텔레그램 전송 성공")
+            except Exception as e:
+                print(f"텔레그램 전송 실패: {e}")
+        else:
+            print("bot이 None - TELEGRAM_TOKEN 또는 CHAT_ID 확인 필요")
+                return
 
+    
     rot_state = load_rotation_state()
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state)
