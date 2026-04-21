@@ -1,23 +1,6 @@
-# “””
-
-# Unified Trading Bot v1.0.0
-UPRO 트렌드 봇 (70%) + 모멘텀 로테이션 봇 (30%) 통합
-
-자본 배분:
-UPRO_RATIO     = 0.70  ← 검증된 주력 (기존 app.py 로직 그대로)
-ROTATION_RATIO = 0.30  ← 실전 검증 시작 (TOP2 모멘텀 로테이션)
-
-스케줄 (GitHub Actions):
-KST 20:00 → 정규 매매
-KST 01:00 → 긴급 탈출
-KST 07:00 → 아침 리포트
-
-# 상태 파일:
-trend_state.json      ← 기존 UPRO 봇 상태 (호환 유지)
-rotation_state.json   ← Rotation 봇 상태 (신규)
-history_trend.csv     ← 기존 UPRO 거래 로그 (호환 유지)
-history_rotation.csv  ← Rotation 거래 로그 (신규)
-
+“””
+Unified Trading Bot v1.1.0
+UPRO Trend Bot (70%) + Momentum Rotation Bot (30%)
 “””
 
 import os
@@ -33,6 +16,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime as dt, timedelta
 import warnings
+import time
 
 try:
 from telegram import Bot
@@ -47,53 +31,53 @@ GEMINI_OK = False
 
 warnings.filterwarnings(‘ignore’)
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 # 1. 설정
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 KST = pytz.timezone(‘Asia/Seoul’)
 
-# ── 자본 배분 (핵심: 두 비율 합계 = 1.0)
+# 자본 배분 (합계 = 1.0)
 
 UPRO_RATIO     = 0.70
 ROTATION_RATIO = 0.30
 
-# ── UPRO 봇 (기존 그대로)
+# UPRO 봇
 
 SIGNAL_TICKER = ‘SPY’
 TRADE_TICKER  = ‘UPRO’
 STATE_FILE    = ‘trend_state.json’
 HISTORY_FILE  = ‘history_trend.csv’
 
-# ── Rotation 봇 (신규)
+# Rotation 봇
 
-CANDIDATE_POOL   = [‘NVDA’, ‘TSLA’, ‘META’, ‘AAPL’, ‘MSFT’, ‘AMZN’, ‘GOOGL’]
-TOP_N            = 2
-VIX_ENTER_MAX    = 25.0
-SPY_6M_MIN       = 0.0
-VIX_EXIT_SPIKE   = 0.30
-SPY_DAILY_EXIT   = -0.03
-STOCK_HARD_STOP  = -0.07
+CANDIDATE_POOL        = [‘NVDA’, ‘TSLA’, ‘META’, ‘AAPL’, ‘MSFT’, ‘AMZN’, ‘GOOGL’]
+TOP_N                 = 2
+VIX_ENTER_MAX         = 25.0
+SPY_6M_MIN            = 0.0
+VIX_EXIT_SPIKE        = 0.30
+SPY_DAILY_EXIT        = -0.03
+STOCK_HARD_STOP       = -0.07
 ROTATION_STATE_FILE   = ‘rotation_state.json’
 ROTATION_HISTORY_FILE = ‘history_rotation.csv’
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 2. KIS API (기존 검증 규격 그대로 유지)
+# 2. KIS API (검증 규격 유지)
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 class KIS_Trader:
 def **init**(self):
-self.base_url    = “https://openapi.koreainvestment.com:9443”
-self.app_key     = os.getenv(‘KIS_APPKEY’)
-self.app_secret  = os.getenv(‘KIS_SECRET’)
-self.cano        = os.getenv(‘KIS_CANO’)
-self.acnt_prdt_cd= os.getenv(‘KIS_ACNT_PRDT_CD’, ‘01’)
-self.token       = None
-self.error_detail= “Initial”
+self.base_url     = “https://openapi.koreainvestment.com:9443”
+self.app_key      = os.getenv(‘KIS_APPKEY’)
+self.app_secret   = os.getenv(‘KIS_SECRET’)
+self.cano         = os.getenv(‘KIS_CANO’)
+self.acnt_prdt_cd = os.getenv(‘KIS_ACNT_PRDT_CD’, ‘01’)
+self.token        = None
+self.error_detail = “Initial”
 self._set_token()
 
 ```
@@ -102,16 +86,16 @@ def _set_token(self):
         url  = f"{self.base_url}/oauth2/tokenP"
         data = {"grant_type": "client_credentials",
                 "appkey": self.app_key, "appsecret": self.app_secret}
-        res  = requests.post(url, headers={"content-type": "application/json"},
-                             data=json.dumps(data))
-        res_data    = res.json()
-        self.token  = res_data.get('access_token')
+        res      = requests.post(url, headers={"content-type": "application/json"},
+                                 data=json.dumps(data))
+        res_data = res.json()
+        self.token = res_data.get('access_token')
         if not self.token:
             self.error_detail = f"Auth Fail: {res_data.get('msg1')}"
     except Exception as e:
         self.error_detail = f"Conn: {str(e)}"
 
-def _headers(self, tr_id: str) -> dict:
+def _headers(self, tr_id):
     return {
         "Content-Type":  "application/json",
         "authorization": f"Bearer {self.token}",
@@ -121,8 +105,7 @@ def _headers(self, tr_id: str) -> dict:
         "custtype":      "P",
     }
 
-def get_total_balance(self) -> float:
-    """전체 주문가능금액(USD) — UPRO+Rotation 공유 원천"""
+def get_total_balance(self):
     if not self.token:
         return 0.0
     try:
@@ -136,8 +119,7 @@ def get_total_balance(self) -> float:
     except:
         return 0.0
 
-def get_holdings_qty(self, ticker: str) -> int:
-    """특정 종목 보유 수량"""
+def get_holdings_qty(self, ticker):
     if not self.token:
         return 0
     try:
@@ -145,8 +127,7 @@ def get_holdings_qty(self, ticker: str) -> int:
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd,
                   "OVRS_EXCG_CD": "AMEX", "TR_CRCY_CD": "USD",
                   "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        res = requests.get(url, headers=self._headers("JTTT3012R"),
-                           params=params)
+        res = requests.get(url, headers=self._headers("JTTT3012R"), params=params)
         for item in res.json().get('output1', []):
             if item.get('pdno') == ticker:
                 return int(float(item.get('ccld_qty_smtl', 0)))
@@ -154,31 +135,7 @@ def get_holdings_qty(self, ticker: str) -> int:
     except:
         return 0
 
-def get_all_holdings(self) -> list:
-    """전체 보유 종목 리스트"""
-    if not self.token:
-        return []
-    try:
-        url    = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-        params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd,
-                  "OVRS_EXCG_CD": "AMEX", "TR_CRCY_CD": "USD",
-                  "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
-        res = requests.get(url, headers=self._headers("JTTT3012R"),
-                           params=params)
-        result = []
-        for item in res.json().get('output1', []):
-            qty = float(item.get('ccld_qty_smtl', 0) or 0)
-            if qty > 0:
-                result.append({
-                    'ticker':    item.get('pdno', ''),
-                    'shares':    int(qty),
-                    'avg_price': float(item.get('pchs_avg_pric', 0) or 0),
-                })
-        return result
-    except:
-        return []
-
-def get_current_price(self, ticker: str) -> float:
+def get_current_price(self, ticker):
     try:
         df = yf.download(ticker, period='1d', interval='1m', progress=False)
         if isinstance(df.columns, pd.MultiIndex):
@@ -189,7 +146,7 @@ def get_current_price(self, ticker: str) -> float:
     except:
         return 0.0
 
-def send_order(self, ticker: str, qty, side: str = "BUY") -> dict:
+def send_order(self, ticker, qty, side="BUY"):
     if not self.token:
         return {"rt_cd": "1", "msg1": "No Token"}
     try:
@@ -197,14 +154,14 @@ def send_order(self, ticker: str, qty, side: str = "BUY") -> dict:
         tr_id     = "TTTT1002U" if side == "BUY" else "TTTT1006U"
         clean_qty = str(int(float(qty)))
         data = {
-            "CANO":           self.cano,
-            "ACNT_PRDT_CD":   self.acnt_prdt_cd,
-            "OVRS_EXCG_CD":   "AMEX",
-            "PDNO":           ticker,
-            "ORD_QTY":        clean_qty,
-            "OVRS_ORD_UNPR":  "0",
-            "ORD_SVR_DVSN_CD":"0",
-            "ORD_DVSN":       "00",
+            "CANO":            self.cano,
+            "ACNT_PRDT_CD":    self.acnt_prdt_cd,
+            "OVRS_EXCG_CD":    "AMEX",
+            "PDNO":            ticker,
+            "ORD_QTY":         clean_qty,
+            "OVRS_ORD_UNPR":   "0",
+            "ORD_SVR_DVSN_CD": "0",
+            "ORD_DVSN":        "00",
         }
         return requests.post(url, headers=self._headers(tr_id),
                              data=json.dumps(data)).json()
@@ -212,39 +169,29 @@ def send_order(self, ticker: str, qty, side: str = "BUY") -> dict:
         return {"rt_cd": "1", "msg1": str(e)}
 ```
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 3. 시장 데이터 (기존 2중 Flattening 그대로)
+# 3. 시장 데이터
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 def get_market_data():
-“”“SPY + VIX + 후보 종목 전체 다운로드”””
 try:
-tickers  = [SIGNAL_TICKER, ‘^VIX’, TRADE_TICKER] + CANDIDATE_POOL
-raw      = yf.download(tickers, period=‘2y’, progress=False,
+spy_raw = yf.download(SIGNAL_TICKER, period=‘2y’, progress=False,
 auto_adjust=True, repair=True)
-if isinstance(raw.columns, pd.MultiIndex):
-raw.columns = raw.columns.get_level_values(0)
+if isinstance(spy_raw.columns, pd.MultiIndex):
+spy_raw.columns = spy_raw.columns.get_level_values(0)
+spy_raw   = spy_raw[[‘Open’, ‘High’, ‘Low’, ‘Close’, ‘Volume’]].copy()
+spy_close = spy_raw[‘Close’].squeeze()
+monthly   = spy_close.resample(‘ME’).last().pct_change().dropna()
 
 ```
-    # SPY OHLCV 분리 (기존 방식 호환)
-    spy_raw  = yf.download(SIGNAL_TICKER, period='2y', progress=False,
-                           auto_adjust=True, repair=True)
-    if isinstance(spy_raw.columns, pd.MultiIndex):
-        spy_raw.columns = spy_raw.columns.get_level_values(0)
-    spy_raw  = spy_raw[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-
-    vix_raw  = yf.download('^VIX', period='2y', progress=False,
-                           auto_adjust=True, repair=True)
+    vix_raw = yf.download('^VIX', period='2y', progress=False,
+                          auto_adjust=True, repair=True)
     if isinstance(vix_raw.columns, pd.MultiIndex):
         vix_raw.columns = vix_raw.columns.get_level_values(0)
-
-    spy_close = spy_raw['Close'].squeeze()
     vix_close = vix_raw['Close'].squeeze()
-    monthly   = spy_close.resample('ME').last().pct_change().dropna()
 
-    # 후보 종목 종가 (Rotation용)
     close_all = {}
     for t in CANDIDATE_POOL:
         try:
@@ -261,11 +208,11 @@ except Exception as e:
     return pd.DataFrame(), pd.Series(), pd.Series(), {}, str(e)
 ```
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 4. UPRO 봇 신호 (기존 get_signal 그대로)
+# 4. UPRO 봇 신호 (v3.6.9 원본 그대로)
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 def get_upro_signal(spy_close, monthly, vix_close):
 if os.path.exists(STATE_FILE):
@@ -295,7 +242,8 @@ if state.get('in_market', True):
 else:
     rebound = (curr_p - state['last_exit_price']) / state['last_exit_price'] \
               if state['last_exit_price'] > 0 else 0
-    vix_now, vix_prev = float(vix_close.iloc[-1]), float(vix_close.iloc[-2])
+    vix_now  = float(vix_close.iloc[-1])
+    vix_prev = float(vix_close.iloc[-2])
     vix_20d  = vix_close.tail(20)
     vix_mean = float(vix_20d.mean())
     vix_std  = float(vix_20d.std())
@@ -305,24 +253,22 @@ else:
         vix_now < vix_prev * 0.95 and
         spy_daily_ret > 0
     )
-    if vix_rev:     return "RE-ENTER", "VIX Reversal", curr_p, state
-    if rebound >= 0.02: return "RE-ENTER", "2% Rebound", curr_p, state
+    if vix_rev:
+        return "RE-ENTER", "VIX Reversal", curr_p, state
+    if rebound >= 0.02:
+        return "RE-ENTER", "2% Rebound", curr_p, state
     return "WAIT", f"Waiting({rebound*100:.1f}%)", curr_p, state
 ```
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 5. Rotation 봇 신호 (신규)
+# 5. Rotation 봇 신호
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-def load_rotation_state() -> dict:
-default = {
-“in_market”: False,
-“holdings”: [],   # [{“ticker”:“NVDA”,“buy_price”:120.0,“shares”:3}]
-“entry_date”: None,
-“consecutive_loss”: 0,
-}
+def load_rotation_state():
+default = {“in_market”: False, “holdings”: [],
+“entry_date”: None, “consecutive_loss”: 0}
 if os.path.exists(ROTATION_STATE_FILE):
 try:
 with open(ROTATION_STATE_FILE) as f:
@@ -335,12 +281,11 @@ except:
 pass
 return default
 
-def save_rotation_state(state: dict):
+def save_rotation_state(state):
 with open(ROTATION_STATE_FILE, ‘w’) as f:
 json.dump(state, f, indent=2, ensure_ascii=False)
 
-def calc_momentum(series: pd.Series) -> float:
-“”“1M×0.2 + 3M×0.3 + 6M×0.5 가중 모멘텀”””
+def calc_momentum(series):
 try:
 s = series.dropna()
 if len(s) < 130:
@@ -352,7 +297,7 @@ return round(m1 * 0.2 + m3 * 0.3 + m6 * 0.5, 2)
 except:
 return -999.0
 
-def get_rotation_signal(spy_close, vix_close, close_all: dict, rot_state: dict) -> dict:
+def get_rotation_signal(spy_close, vix_close, close_all, rot_state):
 try:
 spy_daily = float((spy_close.iloc[-1] / spy_close.iloc[-2]) - 1)
 spy_6m    = float((spy_close.iloc[-1] / spy_close.iloc[-126]) - 1)   
@@ -362,7 +307,6 @@ vix_prev  = float(vix_close.iloc[-2])
 vix_daily = float((vix_now - vix_prev) / vix_prev)
 
 ```
-    # 모멘텀 스코어 계산
     scores = {}
     for t in CANDIDATE_POOL:
         if t in close_all:
@@ -370,7 +314,6 @@ vix_daily = float((vix_now - vix_prev) / vix_prev)
     top2 = [t for t, _ in sorted(scores.items(),
                                  key=lambda x: x[1], reverse=True)[:TOP_N]]
 
-    # 하드스탑 체크 (보유 종목 당일 -7%)
     hard_stop = False
     if rot_state['in_market']:
         for h in rot_state['holdings']:
@@ -380,7 +323,6 @@ vix_daily = float((vix_now - vix_prev) / vix_prev)
                 if daily <= STOCK_HARD_STOP:
                     hard_stop = True
 
-    # VIX 역발상
     vix_reversal = False
     if len(vix_close) >= 3:
         vix_2prev = float(vix_close.iloc[-3])
@@ -389,21 +331,11 @@ vix_daily = float((vix_now - vix_prev) / vix_prev)
                 spy_daily > 0):
             vix_reversal = True
 
-    # 레짐 판단
     regime_ok = (spy_6m > SPY_6M_MIN and vix_now < VIX_ENTER_MAX) or vix_reversal
+    exit_cond = (vix_daily >= VIX_EXIT_SPIKE or spy_daily <= SPY_DAILY_EXIT
+                 or hard_stop or rot_state['consecutive_loss'] >= 2 or not regime_ok)
 
-    # EXIT 조건
-    exit_cond = (
-        vix_daily  >= VIX_EXIT_SPIKE or
-        spy_daily  <= SPY_DAILY_EXIT or
-        hard_stop  or
-        rot_state['consecutive_loss'] >= 2 or
-        not regime_ok
-    )
-
-    # 현재 보유
     current = [h['ticker'] for h in rot_state.get('holdings', [])]
-
     if rot_state['in_market']:
         if exit_cond:
             action = "EXIT"
@@ -414,66 +346,216 @@ vix_daily = float((vix_now - vix_prev) / vix_prev)
     else:
         action = "ENTER" if regime_ok else "WAIT"
 
-    return {
-        "action":       action,
-        "top2":         top2,
-        "scores":       scores,
-        "spy_daily":    round(spy_daily * 100, 2),
-        "spy_6m":       round(spy_6m * 100, 2),
-        "vix_now":      round(vix_now, 2),
-        "vix_daily":    round(vix_daily * 100, 2),
-        "regime_ok":    regime_ok,
-        "hard_stop":    hard_stop,
-        "vix_reversal": vix_reversal,
-    }
+    return {"action": action, "top2": top2, "scores": scores,
+            "spy_daily": round(spy_daily * 100, 2),
+            "spy_6m": round(spy_6m * 100, 2),
+            "vix_now": round(vix_now, 2),
+            "vix_daily": round(vix_daily * 100, 2),
+            "regime_ok": regime_ok, "hard_stop": hard_stop,
+            "vix_reversal": vix_reversal}
 except Exception as e:
     return {"action": "WAIT", "top2": [], "scores": {}, "error": str(e)}
 ```
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 6. Gemini 분석 (선택)
+# 6. 성과 분석
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-def ask_gemini(upro_signal: str, rot_signal: dict) -> str:
+def calc_upro_performance(df):
+empty = {“total_return”: 0.0, “win_rate”: 0.0, “mdd”: 0.0, “sharpe”: 0.0,
+“total_trades”: 0, “win_trades”: 0, “loss_trades”: 0,
+“avg_profit”: 0.0, “avg_loss”: 0.0,
+“best_trade”: 0.0, “worst_trade”: 0.0,
+“equity_curve”: [], “monthly_ret”: []}
+if df is None or df.empty:
+return empty
+
+```
+df = df.copy()
+df['Date']  = pd.to_datetime(df['Date'])
+df['Price'] = pd.to_numeric(df['Price'], errors='coerce').fillna(0)
+df['Qty']   = pd.to_numeric(df['Qty'],   errors='coerce').fillna(0)
+
+buys  = df[df['Action'] == 'BUY'].reset_index(drop=True)
+sells = df[df['Action'] == 'SELL'].reset_index(drop=True)
+
+trades = []
+equity = 100.0
+equity_curve = []
+if not buys.empty:
+    equity_curve = [{"date": str(buys.loc[0, 'Date'].date()), "equity": 100.0}]
+
+for i in range(min(len(buys), len(sells))):
+    buy_p  = float(buys.loc[i, 'Price'])
+    sell_p = float(sells.loc[i, 'Price'])
+    if buy_p <= 0:
+        continue
+    ret = (sell_p - buy_p) / buy_p * 100
+    trades.append({"buy_date": str(buys.loc[i, 'Date'].date()),
+                    "sell_date": str(sells.loc[i, 'Date'].date()),
+                    "return_pct": round(ret, 2), "win": ret > 0})
+    equity *= (1 + ret / 100)
+    equity_curve.append({"date": str(sells.loc[i, 'Date'].date()),
+                          "equity": round(equity, 2)})
+
+if not trades:
+    return empty
+
+rets   = [t['return_pct'] for t in trades]
+wins   = [r for r in rets if r > 0]
+losses = [r for r in rets if r <= 0]
+
+eq_vals = [e['equity'] for e in equity_curve]
+peak = eq_vals[0] if eq_vals else 100.0
+mdd  = 0.0
+for v in eq_vals:
+    if v > peak:
+        peak = v
+    dd = (peak - v) / peak * 100
+    if dd > mdd:
+        mdd = dd
+
+sharpe = 0.0
+if len(rets) > 1:
+    arr    = np.array(rets)
+    sharpe = round(arr.mean() / (arr.std() + 1e-9) * np.sqrt(12), 2)
+
+# 월별 수익률
+sell_df = sells.copy().set_index('Date')
+if not sell_df.empty:
+    monthly_g = []
+    for i2 in range(min(len(buys), len(sells))):
+        buy_p2  = float(buys.loc[i2, 'Price'])
+        sell_p2 = float(sells.loc[i2, 'Price'])
+        if buy_p2 > 0:
+            monthly_g.append({"date": sells.loc[i2, 'Date'],
+                               "ret": round((sell_p2 - buy_p2) / buy_p2 * 100, 2)})
+    monthly_df = pd.DataFrame(monthly_g)
+    if not monthly_df.empty:
+        monthly_df = monthly_df.set_index('date').resample('ME')['ret'].sum().reset_index()
+        monthly_ret = [{"month": str(r['date'])[:7], "ret": round(r['ret'], 2)}
+                       for _, r in monthly_df.iterrows()]
+    else:
+        monthly_ret = []
+else:
+    monthly_ret = []
+
+return {"total_return":  round(equity - 100, 2),
+        "win_rate":      round(len(wins) / len(trades) * 100, 1),
+        "mdd":           round(mdd, 2),
+        "sharpe":        sharpe,
+        "total_trades":  len(trades),
+        "win_trades":    len(wins),
+        "loss_trades":   len(losses),
+        "avg_profit":    round(np.mean(wins),   2) if wins   else 0.0,
+        "avg_loss":      round(np.mean(losses), 2) if losses else 0.0,
+        "best_trade":    round(max(rets), 2) if rets else 0.0,
+        "worst_trade":   round(min(rets), 2) if rets else 0.0,
+        "equity_curve":  equity_curve,
+        "monthly_ret":   monthly_ret}
+```
+
+def calc_rotation_performance(df):
+empty = {“total_return”: 0.0, “win_rate”: 0.0, “mdd”: 0.0, “sharpe”: 0.0,
+“total_trades”: 0, “win_trades”: 0, “loss_trades”: 0,
+“avg_profit”: 0.0, “avg_loss”: 0.0,
+“best_trade”: 0.0, “worst_trade”: 0.0,
+“equity_curve”: [], “monthly_ret”: []}
+if df is None or df.empty:
+return empty
+
+```
+df = df.copy()
+sells = df[df['Action'] == 'SELL'].copy()
+if 'RetPct' not in sells.columns or sells.empty:
+    return empty
+
+sells['RetPct'] = pd.to_numeric(sells['RetPct'], errors='coerce').fillna(0)
+sells['Date']   = pd.to_datetime(sells['Date'])
+sells = sells.sort_values('Date').reset_index(drop=True)
+
+rets   = sells['RetPct'].tolist()
+wins   = [r for r in rets if r > 0]
+losses = [r for r in rets if r <= 0]
+
+equity = 100.0
+equity_curve = [{"date": str(sells.loc[0, 'Date'].date()), "equity": 100.0}]
+for _, row in sells.iterrows():
+    equity *= (1 + row['RetPct'] / 100)
+    equity_curve.append({"date": str(row['Date'].date()),
+                          "equity": round(equity, 2)})
+
+eq_vals = [e['equity'] for e in equity_curve]
+peak = eq_vals[0] if eq_vals else 100.0
+mdd  = 0.0
+for v in eq_vals:
+    if v > peak:
+        peak = v
+    dd = (peak - v) / peak * 100
+    if dd > mdd:
+        mdd = dd
+
+sharpe = 0.0
+if len(rets) > 1:
+    arr    = np.array(rets)
+    sharpe = round(arr.mean() / (arr.std() + 1e-9) * np.sqrt(12), 2)
+
+sells_idx  = sells.set_index('Date')
+monthly_g  = sells_idx['RetPct'].resample('ME').sum().reset_index()
+monthly_ret = [{"month": str(r['Date'])[:7], "ret": round(r['RetPct'], 2)}
+               for _, r in monthly_g.iterrows()]
+
+return {"total_return":  round(equity - 100, 2),
+        "win_rate":      round(len(wins) / len(rets) * 100, 1) if rets else 0.0,
+        "mdd":           round(mdd, 2),
+        "sharpe":        sharpe,
+        "total_trades":  len(rets),
+        "win_trades":    len(wins),
+        "loss_trades":   len(losses),
+        "avg_profit":    round(np.mean(wins),   2) if wins   else 0.0,
+        "avg_loss":      round(np.mean(losses), 2) if losses else 0.0,
+        "best_trade":    round(max(rets), 2) if rets else 0.0,
+        "worst_trade":   round(min(rets), 2) if rets else 0.0,
+        "equity_curve":  equity_curve,
+        "monthly_ret":   monthly_ret}
+```
+
+# ==============================================================
+
+# 7. Gemini
+
+# ==============================================================
+
+def ask_gemini(upro_signal, rot_signal):
 if not GEMINI_OK:
-return “google-generativeai 미설치”
+return “google-generativeai not installed”
 api_key = os.getenv(“GEMINI_API_KEY”, “”)
 if not api_key:
-return “GEMINI_API_KEY 미설정”
+return “GEMINI_API_KEY not set”
 try:
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel(“gemini-1.5-flash”)
-prompt = f”””
-퀀트 트레이딩 전문가로서 아래 두 전략의 현황을 분석해 주세요.
+model  = genai.GenerativeModel(“gemini-1.5-flash”)
+prompt = (
+“You are a quant trading expert. Analyze these two strategies in Korean within 200 chars.\n”
+f”UPRO Bot (70%): {upro_signal}\n”
+f”Rotation Bot (30%): signal={rot_signal.get(‘action’)}, “
+f”top2={rot_signal.get(‘top2’)}, “
+f”SPY6M={rot_signal.get(‘spy_6m’)}%, VIX={rot_signal.get(‘vix_now’)}\n”
+“Answer: 1.Market summary 2.Signal validity 3.Key risk”
+)
+return model.generate_content(prompt).text.strip()
+except Exception as e:
+return f”Gemini error: {str(e)[:80]}”
 
-[UPRO 트렌드 봇 (70% 자본)]
-신호: {upro_signal}
+# ==============================================================
 
-[모멘텀 로테이션 봇 (30% 자본)]
-신호: {rot_signal.get(‘action’)}
-TOP2 종목: {rot_signal.get(‘top2’)}
-SPY 6M: {rot_signal.get(‘spy_6m’)}% | VIX: {rot_signal.get(‘vix_now’)}
-레짐 OK: {rot_signal.get(‘regime_ok’)}
+# 8. Telegram
 
-200자 이내로 간결하게:
+# ==============================================================
 
-1. 전체 시장 상황 한줄 평가
-1. 두 전략 신호 적절성 의견
-1. 주의할 리스크 1가지
-   “””
-   return model.generate_content(prompt).text.strip()
-   except Exception as e:
-   return f”Gemini 오류: {str(e)[:80]}”
-
-# ══════════════════════════════════════════════════════════════
-
-# 7. Telegram
-
-# ══════════════════════════════════════════════════════════════
-
-async def send_telegram(msg: str):
+async def send_telegram(msg):
 token   = os.getenv(‘TELEGRAM_TOKEN’, ‘’)
 chat_id = os.getenv(‘CHAT_ID’, ‘’)
 if not token or not chat_id:
@@ -489,13 +571,13 @@ json={“chat_id”: chat_id, “text”: msg, “parse_mode”: “HTML”},
 timeout=10,
 )
 except Exception as e:
-print(f”Telegram 전송 실패: {e}”)
+print(f”Telegram error: {e}”)
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 8. 자동매매 실행
+# 9. 자동매매 실행
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 async def run_trading():
 now_kst      = dt.now(KST)
@@ -506,85 +588,76 @@ today        = now_kst.strftime(’%Y-%m-%d’)
 trader    = KIS_Trader()
 rot_state = load_rotation_state()
 
-# 전체 잔고 확인
-total_bal = trader.get_total_balance()
+total_bal       = trader.get_total_balance()
+upro_budget     = total_bal * UPRO_RATIO
+rotation_budget = total_bal * ROTATION_RATIO
 
-# ── 배분 금액 계산
-upro_budget     = total_bal * UPRO_RATIO        # 70%
-rotation_budget = total_bal * ROTATION_RATIO    # 30%
-
-print(f"[{now_kst.strftime('%H:%M')}] 총잔고: ${total_bal:.2f} | "
-      f"UPRO예산: ${upro_budget:.2f} | Rotation예산: ${rotation_budget:.2f}")
-
-# 데이터 로드
 spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
 if spy_ohlc.empty:
-    await send_telegram(f"⚠️ 데이터 로드 실패: {data_msg}")
+    await send_telegram(f"Data load failed: {data_msg}")
     return
 
 spy_close = spy_ohlc['Close']
 
-# ── KST 20:00 정규 매매
+# KST 20:00 정규 매매
 if current_hour == 20:
 
-    # ────────────────────────────────
-    # [A] UPRO 봇 (기존 로직 그대로)
-    # ────────────────────────────────
+    # [A] UPRO 봇
     u_signal, u_reason, u_price, u_state = get_upro_signal(spy_close, monthly, vix_close)
-    upro_qty  = trader.get_holdings_qty(TRADE_TICKER)
-    upro_price= trader.get_current_price(TRADE_TICKER)
-    upro_msg  = ""
+    upro_qty   = trader.get_holdings_qty(TRADE_TICKER)
+    upro_price = trader.get_current_price(TRADE_TICKER)
+    upro_msg   = ""
 
     if u_signal in ["KEEP", "RE-ENTER"] and upro_qty == 0 and upro_price > 0:
         buy_qty = int((upro_budget * 0.95) / upro_price)
         if buy_qty >= 1:
             res = trader.send_order(TRADE_TICKER, buy_qty, "BUY")
             if res.get('rt_cd') == '0':
-                upro_msg = f"✅ UPRO 매수 {buy_qty}주 @${upro_price:.2f}"
+                upro_msg = f"BUY {buy_qty}shares @${upro_price:.2f}"
                 u_state['in_market']       = True
                 u_state['last_exit_price'] = 0
                 with open(STATE_FILE, 'w') as f:
                     json.dump(u_state, f)
-                pd.DataFrame([{
-                    "Date": today, "Action": "BUY",
-                    "Qty": buy_qty, "Price": upro_price,
-                    "Strategy": "UPRO", "Budget": upro_budget,
-                }]).to_csv(HISTORY_FILE, mode='a',
-                           header=not os.path.exists(HISTORY_FILE), index=False)
+                pd.DataFrame([{"Date": today, "Action": "BUY",
+                               "Qty": buy_qty, "Price": upro_price,
+                               "Strategy": "UPRO"}
+                              ]).to_csv(HISTORY_FILE, mode='a',
+                                        header=not os.path.exists(HISTORY_FILE),
+                                        index=False)
             else:
-                upro_msg = f"❌ UPRO 매수실패: {str(res)[:100]}"
+                upro_msg = f"BUY FAIL: {str(res)[:80]}"
+        else:
+            upro_msg = f"SKIP (budget ${upro_budget:.0f} too small)"
 
     elif u_signal == "EXIT" and upro_qty > 0:
         res = trader.send_order(TRADE_TICKER, upro_qty, "SELL")
         if res.get('rt_cd') == '0':
-            upro_msg = f"✅ UPRO 매도 {upro_qty}주 @${upro_price:.2f}"
+            upro_msg = f"SELL {upro_qty}shares @${upro_price:.2f}"
             u_state['in_market']       = False
             u_state['last_exit_price'] = u_price
             with open(STATE_FILE, 'w') as f:
                 json.dump(u_state, f)
-            pd.DataFrame([{
-                "Date": today, "Action": "SELL",
-                "Qty": upro_qty, "Price": upro_price,
-                "Strategy": "UPRO", "Budget": upro_budget,
-            }]).to_csv(HISTORY_FILE, mode='a',
-                       header=not os.path.exists(HISTORY_FILE), index=False)
+            pd.DataFrame([{"Date": today, "Action": "SELL",
+                           "Qty": upro_qty, "Price": upro_price,
+                           "Strategy": "UPRO"}
+                          ]).to_csv(HISTORY_FILE, mode='a',
+                                    header=not os.path.exists(HISTORY_FILE),
+                                    index=False)
         else:
-            upro_msg = f"❌ UPRO 매도실패: {str(res)[:100]}"
+            upro_msg = f"SELL FAIL: {str(res)[:80]}"
     else:
-        upro_msg = f"— UPRO {u_signal} ({u_reason})"
+        upro_msg = f"{u_signal} ({u_reason})"
 
-    # ────────────────────────────────
     # [B] Rotation 봇
-    # ────────────────────────────────
-    r_signal  = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
-    r_action  = r_signal['action']
-    top2      = r_signal['top2']
-    rot_msg   = ""
+    r_signal = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
+    r_action = r_signal['action']
+    top2     = r_signal['top2']
+    rot_msg  = ""
 
     if r_action == "ENTER" and not rot_state['in_market'] and len(top2) > 0:
-        per_stock = (rotation_budget * 0.95) / len(top2)
+        per_stock    = (rotation_budget * 0.95) / len(top2)
         new_holdings = []
-        bought = []
+        bought       = []
         for ticker in top2:
             price = trader.get_current_price(ticker)
             if price <= 0:
@@ -594,21 +667,27 @@ if current_hour == 20:
                 continue
             res = trader.send_order(ticker, qty, "BUY")
             if res.get('rt_cd') == '0':
-                new_holdings.append({"ticker": ticker, "buy_price": price, "shares": qty})
-                bought.append(f"{ticker} {qty}주@${price:.1f}")
-                pd.DataFrame([{
-                    "Date": today, "Action": "BUY", "Ticker": ticker,
-                    "Qty": qty, "Price": price, "Strategy": "ROTATION",
-                }]).to_csv(ROTATION_HISTORY_FILE, mode='a',
-                           header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-        rot_state['in_market'] = True
-        rot_state['holdings']  = new_holdings
-        rot_state['entry_date']= today
-        save_rotation_state(rot_state)
-        rot_msg = "✅ ROT 진입: " + ", ".join(bought)
+                new_holdings.append({"ticker": ticker,
+                                     "buy_price": price, "shares": qty})
+                bought.append(f"{ticker} {qty}shares@${price:.1f}")
+                pd.DataFrame([{"Date": today, "Action": "BUY",
+                               "Ticker": ticker, "Qty": qty,
+                               "Price": price, "Strategy": "ROTATION",
+                               "RetPct": 0}
+                              ]).to_csv(ROTATION_HISTORY_FILE, mode='a',
+                                        header=not os.path.exists(ROTATION_HISTORY_FILE),
+                                        index=False)
+        if new_holdings:
+            rot_state['in_market']  = True
+            rot_state['holdings']   = new_holdings
+            rot_state['entry_date'] = today
+            save_rotation_state(rot_state)
+            rot_msg = "ENTER: " + ", ".join(bought)
+        else:
+            rot_msg = f"ENTER SKIP (budget ${rotation_budget:.0f} insufficient)"
 
     elif r_action == "EXIT" and rot_state['in_market']:
-        sold = []
+        sold         = []
         monthly_rets = []
         for h in rot_state['holdings']:
             t   = h['ticker']
@@ -620,108 +699,99 @@ if current_hour == 20:
             if res.get('rt_cd') == '0':
                 ret = (price - h.get('buy_price', price)) / h.get('buy_price', price) * 100
                 monthly_rets.append(ret)
-                sold.append(f"{t} {qty}주@${price:.1f}({ret:+.1f}%)")
-                pd.DataFrame([{
-                    "Date": today, "Action": "SELL", "Ticker": t,
-                    "Qty": qty, "Price": price,
-                    "Strategy": "ROTATION", "RetPct": round(ret, 2),
-                }]).to_csv(ROTATION_HISTORY_FILE, mode='a',
-                           header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                sold.append(f"{t} {qty}shares({ret:+.1f}%)")
+                pd.DataFrame([{"Date": today, "Action": "SELL",
+                               "Ticker": t, "Qty": qty,
+                               "Price": price, "Strategy": "ROTATION",
+                               "RetPct": round(ret, 2)}
+                              ]).to_csv(ROTATION_HISTORY_FILE, mode='a',
+                                        header=not os.path.exists(ROTATION_HISTORY_FILE),
+                                        index=False)
         avg_ret = np.mean(monthly_rets) if monthly_rets else 0
-        if avg_ret < 0:
-            rot_state['consecutive_loss'] += 1
-        else:
-            rot_state['consecutive_loss']  = 0
+        rot_state['consecutive_loss'] = rot_state['consecutive_loss'] + 1 \
+                                        if avg_ret < 0 else 0
         rot_state['in_market'] = False
         rot_state['holdings']  = []
         save_rotation_state(rot_state)
-        rot_msg = "🔴 ROT 탈출: " + ", ".join(sold)
+        rot_msg = "EXIT: " + ", ".join(sold)
 
     elif r_action == "ROTATE" and rot_state['in_market']:
         current  = [h['ticker'] for h in rot_state['holdings']]
         to_sell  = [t for t in current if t not in top2]
         to_buy   = [t for t in top2    if t not in current]
         rot_log  = []
-        # 매도
         for t in to_sell:
             qty = trader.get_holdings_qty(t)
             if qty > 0:
                 price = trader.get_current_price(t)
                 res   = trader.send_order(t, qty, "SELL")
                 if res.get('rt_cd') == '0':
-                    rot_log.append(f"OUT {t}")
-                    pd.DataFrame([{
-                        "Date": today, "Action": "SELL", "Ticker": t,
-                        "Qty": qty, "Price": price, "Strategy": "ROTATION",
-                    }]).to_csv(ROTATION_HISTORY_FILE, mode='a',
-                               header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-        import time; time.sleep(2)
-        # 매수
-        freed_budget = (rotation_budget * 0.95) / max(len(to_buy), 1)
-        new_holdings = [h for h in rot_state['holdings'] if h['ticker'] not in to_sell]
+                    rot_log.append(f"OUT:{t}")
+                    pd.DataFrame([{"Date": today, "Action": "SELL",
+                                   "Ticker": t, "Qty": qty,
+                                   "Price": price, "Strategy": "ROTATION",
+                                   "RetPct": 0}
+                                  ]).to_csv(ROTATION_HISTORY_FILE, mode='a',
+                                            header=not os.path.exists(ROTATION_HISTORY_FILE),
+                                            index=False)
+        time.sleep(2)
+        freed        = (rotation_budget * 0.95) / max(len(to_buy), 1)
+        new_holdings = [h for h in rot_state['holdings']
+                        if h['ticker'] not in to_sell]
         for t in to_buy:
             price = trader.get_current_price(t)
             if price <= 0:
                 continue
-            qty = int(freed_budget / price)
+            qty = int(freed / price)
             if qty < 1:
                 continue
             res = trader.send_order(t, qty, "BUY")
             if res.get('rt_cd') == '0':
                 new_holdings.append({"ticker": t, "buy_price": price, "shares": qty})
-                rot_log.append(f"IN {t}")
-                pd.DataFrame([{
-                    "Date": today, "Action": "BUY", "Ticker": t,
-                    "Qty": qty, "Price": price, "Strategy": "ROTATION",
-                }]).to_csv(ROTATION_HISTORY_FILE, mode='a',
-                           header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                rot_log.append(f"IN:{t}")
+                pd.DataFrame([{"Date": today, "Action": "BUY",
+                               "Ticker": t, "Qty": qty,
+                               "Price": price, "Strategy": "ROTATION",
+                               "RetPct": 0}
+                              ]).to_csv(ROTATION_HISTORY_FILE, mode='a',
+                                        header=not os.path.exists(ROTATION_HISTORY_FILE),
+                                        index=False)
         rot_state['holdings'] = new_holdings
         save_rotation_state(rot_state)
-        rot_msg = "🔄 ROT 교체: " + " → ".join(rot_log)
+        rot_msg = "ROTATE: " + " > ".join(rot_log)
     else:
-        rot_msg = f"— ROT {r_action} (TOP2: {','.join(top2)})"
+        rot_msg = f"{r_action} (TOP2: {','.join(top2)})"
 
-    # Gemini 분석
     gemini_txt = ask_gemini(f"{u_signal}:{u_reason}", r_signal)
 
-    # 통합 Telegram 알림
-    msg = f"""🤖 <b>통합봇 정규매매</b> {now_kst.strftime('%m/%d %H:%M')}
-```
+    msg = (
+        f"<b>Unified Bot - Trade Report</b> {now_kst.strftime('%m/%d %H:%M')}\n"
+        f"Balance: ${total_bal:,.2f} | UPRO: ${upro_budget:,.2f} | ROT: ${rotation_budget:,.2f}\n"
+        f"SPY: {r_signal.get('spy_daily', 0):+.2f}% | VIX: {r_signal.get('vix_now', 0):.1f}\n"
+        f"UPRO: {upro_msg}\n"
+        f"ROT:  {rot_msg}\n"
+        f"Gemini: {gemini_txt[:200]}"
+    )
+    await send_telegram(msg)
 
-━━━━━━━━━━━━━━━━━━━━
-💼 총잔고: ${total_bal:,.2f}
-├ UPRO예산: ${upro_budget:,.2f} (70%)
-└ ROT예산:  ${rotation_budget:,.2f} (30%)
-━━━━━━━━━━━━━━━━━━━━
-📊 SPY: {r_signal.get(‘spy_daily’,0):+.2f}% | VIX: {r_signal.get(‘vix_now’,0):.1f}
-━━━━━━━━━━━━━━━━━━━━
-🔵 UPRO봇: {upro_msg}
-🟡 ROT봇:  {rot_msg}
-━━━━━━━━━━━━━━━━━━━━
-🤖 Gemini: {gemini_txt[:250]}”””
-await send_telegram(msg)
-
-```
-# ── KST 01:00 긴급 탈출
+# KST 01:00 긴급 탈출
 elif current_hour == 1:
     u_signal, u_reason, u_price, u_state = get_upro_signal(spy_close, monthly, vix_close)
     r_signal  = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
     emergency = []
 
-    # UPRO 긴급 탈출
     if u_signal == "EXIT":
         upro_qty = trader.get_holdings_qty(TRADE_TICKER)
         if upro_qty > 0:
             price = trader.get_current_price(TRADE_TICKER)
             res   = trader.send_order(TRADE_TICKER, upro_qty, "SELL")
             if res.get('rt_cd') == '0':
-                emergency.append(f"🔴 UPRO 긴급매도 {upro_qty}주@${price:.2f}")
+                emergency.append(f"UPRO EMERGENCY SELL {upro_qty}shares@${price:.2f}")
                 u_state['in_market']       = False
                 u_state['last_exit_price'] = u_price
                 with open(STATE_FILE, 'w') as f:
                     json.dump(u_state, f)
 
-    # Rotation 긴급 탈출
     if r_signal['action'] == "EXIT" and rot_state['in_market']:
         for h in rot_state['holdings']:
             t   = h['ticker']
@@ -730,62 +800,63 @@ elif current_hour == 1:
                 price = trader.get_current_price(t)
                 res   = trader.send_order(t, qty, "SELL")
                 if res.get('rt_cd') == '0':
-                    emergency.append(f"🔴 ROT {t} 긴급매도 {qty}주@${price:.2f}")
+                    emergency.append(f"ROT EMERGENCY SELL {t} {qty}shares@${price:.2f}")
         rot_state['in_market'] = False
         rot_state['holdings']  = []
         save_rotation_state(rot_state)
 
     if emergency:
         await send_telegram(
-            f"🚨 <b>긴급탈출</b> {now_kst.strftime('%H:%M')}\n" +
+            f"<b>EMERGENCY EXIT</b> {now_kst.strftime('%H:%M')}\n" +
             "\n".join(emergency)
         )
 
-# ── KST 07:00 아침 리포트
+# KST 07:00 아침 리포트
 elif current_hour == 7:
-    r_signal  = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
-    upro_qty  = trader.get_holdings_qty(TRADE_TICKER)
-    rot_hold  = ", ".join([h['ticker'] for h in rot_state.get('holdings', [])]) or "없음"
-    gemini_txt= ask_gemini("morning_check", r_signal)
-
-    msg = f"""📋 <b>아침 리포트</b> {now_kst.strftime('%m/%d %H:%M')}
+    r_signal   = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
+    upro_qty   = trader.get_holdings_qty(TRADE_TICKER)
+    rot_hold   = ", ".join([h['ticker'] for h in rot_state.get('holdings', [])]) or "CASH"
+    gemini_txt = ask_gemini("morning_check", r_signal)
+    msg = (
+        f"<b>Morning Report</b> {now_kst.strftime('%m/%d %H:%M')}\n"
+        f"Balance: ${total_bal:,.2f}\n"
+        f"UPRO: {str(upro_qty) + 'shares' if upro_qty > 0 else 'CASH'}\n"
+        f"ROT: {rot_hold}\n"
+        f"SPY 6M: {r_signal.get('spy_6m', 0):+.1f}% | VIX: {r_signal.get('vix_now', 0):.1f}\n"
+        f"TOP2: {', '.join(r_signal.get('top2', []))}\n"
+        f"Gemini: {gemini_txt[:200]}"
+    )
+    await send_telegram(msg)
 ```
 
-━━━━━━━━━━━━━━━━━━━━
-💵 총잔고: ${total_bal:,.2f}
-🔵 UPRO: {‘보유 ’ + str(upro_qty) + ‘주’ if upro_qty > 0 else ‘현금’}
-🟡 ROT:  {rot_hold}
-━━━━━━━━━━━━━━━━━━━━
-📊 SPY 6M: {r_signal.get(‘spy_6m’,0):+.1f}% | VIX: {r_signal.get(‘vix_now’,0):.1f}
-🎯 모멘텀 TOP2: {’, ’.join(r_signal.get(‘top2’,[]))}
-━━━━━━━━━━━━━━━━━━━━
-🤖 {gemini_txt[:200]}”””
-await send_telegram(msg)
+# ==============================================================
 
-# ══════════════════════════════════════════════════════════════
+# 10. Streamlit 대시보드
 
-# 9. Streamlit 대시보드
-
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 def run_dashboard():
 now_kst = dt.now(KST)
-st.set_page_config(page_title=“Unified Bot v1.0”, layout=“wide”, page_icon=“🤖”)
+st.set_page_config(page_title=“Unified Bot v1.1”, layout=“wide”, page_icon=“🤖”)
+st.markdown(”””
+<style>
+.main { background: #0a0f1e; }
+h1, h2, h3 { color: #e0f0ff !important; }
+div[data-testid=“metric-container”] {
+background: rgba(0,20,50,0.6);
+border: 1px solid #1a3050;
+border-radius: 10px;
+padding: 8px 12px;
+}
+</style>
+“””, unsafe_allow_html=True)
 
 ```
-st.markdown("""
-<style>
-.main { background:#0a0f1e; }
-h1,h2,h3 { color:#e0f0ff !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# 사이드바
 with st.sidebar:
-    st.markdown("### 🤖 Unified Bot v1.0")
+    st.markdown("### Unified Bot v1.1")
     st.caption(f"{now_kst.strftime('%m/%d %H:%M')} KST")
     st.divider()
-    st.markdown(f"**자본 배분**\n- 🔵 UPRO: {int(UPRO_RATIO*100)}%\n- 🟡 ROT: {int(ROTATION_RATIO*100)}%")
+    st.markdown(f"**자본 배분**\n- UPRO: {int(UPRO_RATIO*100)}%\n- ROT: {int(ROTATION_RATIO*100)}%")
     st.divider()
     st.markdown("**UPRO EXIT**")
     st.caption("VIX+30% / SPY-3% / SPY 3일-5% / 연속2개월하락")
@@ -794,7 +865,7 @@ with st.sidebar:
     st.divider()
     st.markdown("**후보 풀**")
     for t in CANDIDATE_POOL:
-        st.caption(f"• {t}")
+        st.caption(f"- {t}")
 
 # 데이터 로드
 @st.cache_data(ttl=300)
@@ -808,180 +879,290 @@ if spy_ohlc.empty:
     st.error(f"데이터 로드 실패: {data_msg}")
     return
 
-spy_close                            = spy_ohlc['Close']
+spy_close                             = spy_ohlc['Close']
 u_signal, u_reason, u_price, u_state = get_upro_signal(spy_close, monthly, vix_close)
-r_signal                             = get_rotation_signal(spy_close, vix_close, close_all, rot_state)
+r_signal                              = get_rotation_signal(spy_close, vix_close,
+                                                            close_all, rot_state)
 
-# ── 헤더
-st.title("🤖 Unified Trading Bot")
-st.caption(f"UPRO 트렌드 {int(UPRO_RATIO*100)}% + 모멘텀 로테이션 {int(ROTATION_RATIO*100)}%  |  {now_kst.strftime('%Y-%m-%d %H:%M')} KST")
-st.divider()
+df_upro = pd.read_csv(HISTORY_FILE) \
+          if os.path.exists(HISTORY_FILE) else pd.DataFrame()
+df_rot  = pd.read_csv(ROTATION_HISTORY_FILE) \
+          if os.path.exists(ROTATION_HISTORY_FILE) else pd.DataFrame()
 
-# ── 자본 배분 현황 (상단 바)
-trader = KIS_Trader()
-total_bal       = trader.get_total_balance()
-upro_budget     = total_bal * UPRO_RATIO
-rotation_budget = total_bal * ROTATION_RATIO
+upro_perf = calc_upro_performance(df_upro)
+rot_perf  = calc_rotation_performance(df_rot)
 
-ca, cb, cc = st.columns(3)
-ca.metric("💵 총 주문가능금액", f"${total_bal:,.2f}")
-cb.metric("🔵 UPRO 예산 (70%)", f"${upro_budget:,.2f}")
-cc.metric("🟡 ROT 예산 (30%)", f"${rotation_budget:,.2f}")
+tab1, tab2, tab3 = st.tabs(["실시간 현황", "성과 분석", "거래 로그"])
 
-st.divider()
-
-# ── 두 봇 나란히
-col_upro, col_rot = st.columns(2)
-
-# ── UPRO 봇 패널
-with col_upro:
-    st.subheader("🔵 UPRO 트렌드 봇")
-    u1, u2, u3 = st.columns(3)
-    u1.metric("포지션", "IN" if u_state.get('in_market') else "OUT")
-    u2.metric("신호", u_signal)
-    u3.metric("SPY", f"${u_price:.2f}")
-
-    if u_signal == "KEEP":
-        st.success(f"✅ {u_reason}")
-    elif u_signal == "EXIT":
-        st.error(f"🔴 {u_reason}")
-    elif u_signal == "RE-ENTER":
-        st.success(f"🟢 {u_reason}")
-    else:
-        st.info(f"⚪ {u_reason}")
-
-    # UPRO 차트
-    upro_data = spy_ohlc['Close'].tail(63)
-    fig_upro  = go.Figure()
-    fig_upro.add_trace(go.Scatter(
-        x=upro_data.index, y=upro_data.values,
-        line=dict(color="#38bdf8", width=2), name="SPY",
-        fill='tozeroy', fillcolor='rgba(56,189,248,0.05)'
-    ))
-    fig_upro.update_layout(
-        template='plotly_dark', height=200,
-        margin=dict(l=5, r=5, t=5, b=5),
-        paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
-        showlegend=False,
+# ----------------------------------------------------------
+# TAB 1: 실시간 현황
+# ----------------------------------------------------------
+with tab1:
+    st.title("Unified Trading Bot")
+    st.caption(
+        f"UPRO {int(UPRO_RATIO*100)}% + Rotation {int(ROTATION_RATIO*100)}%"
+        f"  |  {now_kst.strftime('%Y-%m-%d %H:%M')} KST"
     )
-    st.plotly_chart(fig_upro, use_container_width=True)
+    st.divider()
 
-# ── Rotation 봇 패널
-with col_rot:
-    st.subheader("🟡 모멘텀 로테이션 봇")
-    r1, r2, r3 = st.columns(3)
-    r1.metric("포지션", "IN" if rot_state['in_market'] else "OUT")
-    r2.metric("신호", r_signal['action'])
-    r3.metric("VIX", f"{r_signal.get('vix_now', 0):.1f}")
+    trader    = KIS_Trader()
+    total_bal = trader.get_total_balance()
+    ca, cb, cc = st.columns(3)
+    ca.metric("총 주문가능금액",    f"${total_bal:,.2f}")
+    cb.metric("UPRO 예산 (70%)", f"${total_bal * UPRO_RATIO:,.2f}")
+    cc.metric("ROT 예산 (30%)",  f"${total_bal * ROTATION_RATIO:,.2f}")
+    st.divider()
 
-    r_action = r_signal['action']
-    if r_action == "KEEP":
-        st.success(f"✅ 보유유지: {', '.join([h['ticker'] for h in rot_state['holdings']])}")
-    elif r_action == "EXIT":
-        st.error("🔴 탈출 신호")
-    elif r_action == "ENTER":
-        st.success(f"🟢 진입: {', '.join(r_signal.get('top2', []))}")
-    elif r_action == "ROTATE":
-        st.warning(f"🔄 교체: {', '.join(r_signal.get('top2', []))}")
-    else:
-        st.info(f"⚪ 대기 | SPY 6M: {r_signal.get('spy_6m', 0):+.1f}%")
+    col_u, col_r = st.columns(2)
 
-    # 모멘텀 스코어 바
-    scores = r_signal.get('scores', {})
-    if scores:
-        top2_set = set(r_signal.get('top2', []))
-        df_sc    = pd.DataFrame(
-            sorted(scores.items(), key=lambda x: x[1], reverse=True),
-            columns=['종목', '스코어']
-        )
-        fig_sc = go.Figure(go.Bar(
-            x=df_sc['종목'], y=df_sc['스코어'],
-            marker_color=["#fbbf24" if t in top2_set else "#2a4060"
-                          for t in df_sc['종목']],
-            text=[f"{v:.1f}" for v in df_sc['스코어']],
-            textposition='outside',
+    with col_u:
+        st.subheader("UPRO 트렌드 봇")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("포지션", "IN" if u_state.get('in_market') else "OUT")
+        m2.metric("신호",   u_signal)
+        m3.metric("SPY",    f"${u_price:.2f}")
+        if u_signal == "KEEP":
+            st.success(f"KEEP - {u_reason}")
+        elif u_signal == "EXIT":
+            st.error(f"EXIT - {u_reason}")
+        elif u_signal == "RE-ENTER":
+            st.success(f"RE-ENTER - {u_reason}")
+        else:
+            st.info(f"WAIT - {u_reason}")
+
+        fig_spy = go.Figure()
+        fig_spy.add_trace(go.Scatter(
+            x=spy_ohlc['Close'].tail(63).index,
+            y=spy_ohlc['Close'].tail(63).values,
+            line=dict(color="#38bdf8", width=2),
+            fill='tozeroy', fillcolor='rgba(56,189,248,0.05)',
         ))
-        fig_sc.update_layout(
-            template='plotly_dark', height=200,
-            margin=dict(l=5, r=5, t=5, b=25),
-            paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
-            showlegend=False,
-        )
-        st.plotly_chart(fig_sc, use_container_width=True)
+        fig_spy.update_layout(template='plotly_dark', height=180,
+                              margin=dict(l=5, r=5, t=5, b=5),
+                              paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
+                              showlegend=False)
+        st.plotly_chart(fig_spy, use_container_width=True)
 
-st.divider()
+    with col_r:
+        st.subheader("모멘텀 로테이션 봇")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("포지션", "IN" if rot_state['in_market'] else "OUT")
+        r2.metric("신호",   r_signal['action'])
+        r3.metric("VIX",    f"{r_signal.get('vix_now', 0):.1f}")
 
-# ── 통합 VIX 차트
-st.subheader("📊 SPY / VIX 차트")
-fig2 = make_subplots(rows=2, cols=1, row_heights=[0.6, 0.4],
-                     shared_xaxes=True, vertical_spacing=0.05)
-fig2.add_trace(go.Candlestick(
-    x=spy_ohlc.tail(126).index,
-    open=spy_ohlc.tail(126)['Open'],
-    high=spy_ohlc.tail(126)['High'],
-    low=spy_ohlc.tail(126)['Low'],
-    close=spy_ohlc.tail(126)['Close'],
-    name='SPY',
-), row=1, col=1)
-fig2.add_trace(go.Bar(
-    x=vix_close.tail(126).index,
-    y=vix_close.tail(126).values,
-    name='VIX',
-    marker_color=['#f87171' if v > 25 else '#f59e0b' if v > 20 else '#34d399'
-                  for v in vix_close.tail(126).values],
-), row=2, col=1)
-fig2.update_layout(
-    template='plotly_dark', height=480,
-    margin=dict(l=10, r=10, t=10, b=10),
-    paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
-    xaxis_rangeslider_visible=False,
-)
-st.plotly_chart(fig2, use_container_width=True)
+        r_action = r_signal['action']
+        if r_action == "KEEP":
+            st.success(f"KEEP - {', '.join([h['ticker'] for h in rot_state['holdings']])}")
+        elif r_action == "EXIT":
+            st.error("EXIT - 탈출 신호")
+        elif r_action == "ENTER":
+            st.success(f"ENTER - {', '.join(r_signal.get('top2', []))}")
+        elif r_action == "ROTATE":
+            st.warning(f"ROTATE - {', '.join(r_signal.get('top2', []))}")
+        else:
+            st.info(f"WAIT - SPY 6M: {r_signal.get('spy_6m', 0):+.1f}%")
 
-# ── Gemini 분석
-st.divider()
-st.subheader("🤖 Gemini AI 분석")
-if st.button("분석 요청", type="secondary"):
-    with st.spinner("Gemini 분석 중..."):
-        result = ask_gemini(f"{u_signal}:{u_reason}", r_signal)
-        st.info(result)
+        scores = r_signal.get('scores', {})
+        if scores:
+            top2_set = set(r_signal.get('top2', []))
+            df_sc    = pd.DataFrame(
+                sorted(scores.items(), key=lambda x: x[1], reverse=True),
+                columns=['ticker', 'score']
+            )
+            fig_sc = go.Figure(go.Bar(
+                x=df_sc['ticker'], y=df_sc['score'],
+                marker_color=["#fbbf24" if t in top2_set else "#2a4060"
+                              for t in df_sc['ticker']],
+                text=[f"{v:.1f}" for v in df_sc['score']],
+                textposition='outside',
+            ))
+            fig_sc.update_layout(template='plotly_dark', height=180,
+                                 margin=dict(l=5, r=5, t=5, b=5),
+                                 paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
+                                 showlegend=False)
+            st.plotly_chart(fig_sc, use_container_width=True)
 
-# ── 거래 로그
-st.divider()
-st.subheader("📋 거래 로그")
-log_col1, log_col2 = st.columns(2)
+    st.divider()
 
-with log_col1:
-    st.caption("🔵 UPRO 봇")
-    if os.path.exists(HISTORY_FILE):
-        df_u = pd.read_csv(HISTORY_FILE)
-        st.dataframe(df_u.tail(10).iloc[::-1], use_container_width=True, hide_index=True)
+    fig2 = make_subplots(rows=2, cols=1, row_heights=[0.6, 0.4],
+                         shared_xaxes=True, vertical_spacing=0.05)
+    fig2.add_trace(go.Candlestick(
+        x=spy_ohlc.tail(126).index,
+        open=spy_ohlc.tail(126)['Open'], high=spy_ohlc.tail(126)['High'],
+        low=spy_ohlc.tail(126)['Low'],   close=spy_ohlc.tail(126)['Close'],
+        name='SPY',
+    ), row=1, col=1)
+    fig2.add_trace(go.Bar(
+        x=vix_close.tail(126).index, y=vix_close.tail(126).values,
+        name='VIX',
+        marker_color=['#f87171' if v > 25 else '#f59e0b' if v > 20 else '#34d399'
+                      for v in vix_close.tail(126).values],
+    ), row=2, col=1)
+    fig2.update_layout(template='plotly_dark', height=450,
+                       margin=dict(l=10, r=10, t=10, b=10),
+                       paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
+                       xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.divider()
+    st.subheader("Gemini AI 분석")
+    if st.button("분석 요청", type="secondary"):
+        with st.spinner("Gemini 분석 중..."):
+            st.info(ask_gemini(f"{u_signal}:{u_reason}", r_signal))
+
+    with st.expander("Debug - 데이터 엔진 상태", expanded=False):
+        st.write(f"데이터 상태: {data_msg}")
+        st.write(f"SPY Shape: {spy_ohlc.shape} | Columns: {spy_ohlc.columns.tolist()}")
+        st.write(f"Rotation State: {rot_state}")
+        if not spy_ohlc.empty:
+            st.dataframe(spy_ohlc.tail(3))
+
+# ----------------------------------------------------------
+# TAB 2: 성과 분석
+# ----------------------------------------------------------
+with tab2:
+    st.subheader("실제 성과 분석")
+
+    has_upro = upro_perf['total_trades'] > 0
+    has_rot  = rot_perf['total_trades'] > 0
+
+    if not has_upro and not has_rot:
+        st.info("아직 거래 기록이 없습니다. 첫 거래 후 성과가 표시됩니다.")
+        st.caption("history_trend.csv / history_rotation.csv 생성 후 자동 집계됩니다.")
     else:
-        st.info("거래 없음")
+        # KPI 카드
+        st.markdown("#### 전략별 핵심 지표")
+        for label, perf in [("UPRO 트렌드 봇", upro_perf),
+                             ("모멘텀 로테이션 봇", rot_perf)]:
+            st.markdown(f"**{label}**")
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("총 수익률",  f"{perf['total_return']:+.1f}%")
+            k2.metric("MDD",       f"-{perf['mdd']:.1f}%")
+            k3.metric("승률",      f"{perf['win_rate']:.0f}%")
+            k4.metric("샤프비율",   f"{perf['sharpe']:.2f}")
+            k5.metric("총 거래",    f"{perf['total_trades']}회")
 
-with log_col2:
-    st.caption("🟡 Rotation 봇")
-    if os.path.exists(ROTATION_HISTORY_FILE):
-        df_r = pd.read_csv(ROTATION_HISTORY_FILE)
-        st.dataframe(df_r.tail(10).iloc[::-1], use_container_width=True, hide_index=True)
-    else:
-        st.info("거래 없음")
+            k6, k7, k8, k9, k10 = st.columns(5)
+            k6.metric("승/패",     f"{perf['win_trades']}/{perf['loss_trades']}")
+            k7.metric("평균 수익", f"{perf['avg_profit']:+.1f}%")
+            k8.metric("평균 손실", f"{perf['avg_loss']:+.1f}%")
+            k9.metric("최고 거래", f"{perf['best_trade']:+.1f}%")
+            k10.metric("최악 거래",f"{perf['worst_trade']:+.1f}%")
+            st.divider()
 
-# ── 디버그 (기존 유지)
-with st.expander("🛠️ 데이터 엔진 상태 점검 (Debug)", expanded=False):
-    st.write(f"데이터 상태: {data_msg}")
-    st.write(f"SPY Shape: {spy_ohlc.shape}")
-    st.write(f"컬럼: {spy_ohlc.columns.tolist()}")
-    st.write(f"Rotation 상태: {rot_state}")
-    if not spy_ohlc.empty:
-        st.write("SPY 최근 3일:", spy_ohlc.tail(3))
+        # 누적 수익률 곡선
+        st.markdown("#### 누적 수익률 곡선")
+        fig_eq = go.Figure()
+
+        if has_upro and upro_perf['equity_curve']:
+            dates_u = [e['date']   for e in upro_perf['equity_curve']]
+            vals_u  = [e['equity'] for e in upro_perf['equity_curve']]
+            fig_eq.add_trace(go.Scatter(x=dates_u, y=vals_u,
+                                        name="UPRO 봇",
+                                        line=dict(color="#38bdf8", width=2.5)))
+
+        if has_rot and rot_perf['equity_curve']:
+            dates_r = [e['date']   for e in rot_perf['equity_curve']]
+            vals_r  = [e['equity'] for e in rot_perf['equity_curve']]
+            fig_eq.add_trace(go.Scatter(x=dates_r, y=vals_r,
+                                        name="Rotation 봇",
+                                        line=dict(color="#fbbf24", width=2.5)))
+
+        # SPY B&H 비교
+        if not df_upro.empty:
+            try:
+                start_d = pd.to_datetime(df_upro['Date'].min()).strftime('%Y-%m-%d')
+                spy_bh  = yf.download(SIGNAL_TICKER, start=start_d,
+                                      progress=False, auto_adjust=True)
+                if isinstance(spy_bh.columns, pd.MultiIndex):
+                    spy_bh.columns = spy_bh.columns.get_level_values(0)
+                if not spy_bh.empty:
+                    spy_norm = spy_bh['Close'] / spy_bh['Close'].iloc[0] * 100
+                    fig_eq.add_trace(go.Scatter(
+                        x=spy_norm.index.astype(str), y=spy_norm.values,
+                        name="SPY B&H",
+                        line=dict(color="#64748b", width=1.5, dash='dash')))
+            except:
+                pass
+
+        fig_eq.update_layout(template='plotly_dark', height=350,
+                              margin=dict(l=10, r=10, t=10, b=10),
+                              paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
+                              yaxis_title="누적 수익 (시작=100)",
+                              legend=dict(orientation='h', y=1.05))
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+        # 월별 수익률 히트맵
+        st.markdown("#### 월별 수익률 히트맵")
+        for label, perf in [("UPRO 봇", upro_perf), ("Rotation 봇", rot_perf)]:
+            if not perf['monthly_ret']:
+                continue
+            st.caption(label)
+            mdf = pd.DataFrame(perf['monthly_ret'])
+            mdf['year']  = mdf['month'].str[:4]
+            mdf['mon']   = mdf['month'].str[5:7]
+            pivot = mdf.pivot(index='year', columns='mon', values='ret').fillna(0)
+            mon_labels = ['Jan','Feb','Mar','Apr','May','Jun',
+                          'Jul','Aug','Sep','Oct','Nov','Dec']
+            col_map = {str(i+1).zfill(2): mon_labels[i] for i in range(12)}
+            pivot.columns = [col_map.get(c, c) for c in pivot.columns]
+
+            fig_hm = go.Figure(go.Heatmap(
+                z=pivot.values,
+                x=pivot.columns.tolist(),
+                y=pivot.index.tolist(),
+                colorscale=[
+                    [0.0, '#7f1d1d'], [0.4, '#f87171'],
+                    [0.5, '#1e293b'],
+                    [0.6, '#34d399'], [1.0, '#064e3b']
+                ],
+                zmid=0,
+                text=[[f"{v:+.1f}%" for v in row] for row in pivot.values],
+                texttemplate="%{text}",
+                showscale=True,
+            ))
+            fig_hm.update_layout(template='plotly_dark', height=180,
+                                 margin=dict(l=10, r=10, t=10, b=10),
+                                 paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
+            st.plotly_chart(fig_hm, use_container_width=True)
+
+# ----------------------------------------------------------
+# TAB 3: 거래 로그
+# ----------------------------------------------------------
+with tab3:
+    st.subheader("거래 로그")
+    log_col1, log_col2 = st.columns(2)
+
+    with log_col1:
+        st.caption("UPRO 봇 (history_trend.csv)")
+        if not df_upro.empty:
+            df_show = df_upro.tail(20).iloc[::-1].copy()
+            st.dataframe(df_show, use_container_width=True, hide_index=True)
+            csv_u = df_upro.to_csv(index=False).encode('utf-8')
+            st.download_button("CSV 다운로드 (UPRO)", csv_u,
+                               file_name="history_trend.csv",
+                               mime="text/csv")
+        else:
+            st.info("거래 없음")
+
+    with log_col2:
+        st.caption("Rotation 봇 (history_rotation.csv)")
+        if not df_rot.empty:
+            df_show_r = df_rot.tail(20).iloc[::-1].copy()
+            st.dataframe(df_show_r, use_container_width=True, hide_index=True)
+            csv_r = df_rot.to_csv(index=False).encode('utf-8')
+            st.download_button("CSV 다운로드 (Rotation)", csv_r,
+                               file_name="history_rotation.csv",
+                               mime="text/csv")
+        else:
+            st.info("거래 없음")
 ```
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
-# 10. 진입점
+# 11. 진입점
 
-# ══════════════════════════════════════════════════════════════
+# ==============================================================
 
 if os.getenv(‘GITHUB_ACTIONS’) == ‘true’:
 asyncio.run(run_trading())
