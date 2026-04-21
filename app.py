@@ -384,7 +384,7 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "GEMINI_API_KEY 미설정"
     try:
-        genai.configure(api_key=api_key)
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"), transport='rest')
         model  = genai.GenerativeModel("gemini-1.5-flash")
         prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}, VIX {r_sig.get('vix_now')}. Korean 150자: 1.시장평가 2.리스크")
         return model.generate_content(prompt).text.strip()
