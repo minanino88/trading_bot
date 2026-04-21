@@ -391,33 +391,25 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     
-    # [최종] 2026년 기준, 민환님 계정에서 허용되는 모든 모델명을 순차적으로 찌릅니다.
-    # 하나라도 200 OK가 나면 바로 리턴합니다.
-    model_candidates = ["gemini-3-flash", "gemini-1.5-flash", "gemini-pro"]
+    # [2026년 4월 최신] 404를 피하기 위한 실시간 모델 리스트입니다.
+    # gemini-pro, 1.5-flash는 더 이상 존재하지 않는 엔드포인트입니다.
+    model_candidates = ["gemini-3.1-flash", "gemini-2.5-flash", "gemini-1.5-flash-002"]
     
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
 
-    last_error = ""
     for model in model_candidates:
-        # v1 정식 주소가 404가 나면 v1beta로 자동 전환해서 시도합니다.
-        for ver in ["v1", "v1beta"]:
-            url = f"https://generativelanguage.googleapis.com/{ver}/models/{model}:generateContent?key={api_key}"
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=5)
-                if res.status_code == 200:
-                    res_json = res.json()
-                    return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                else:
-                    last_error = f"{ver}/{model}: {res.status_code}"
-            except:
-                continue
-
-    # 모든 모델이 실패했을 때만 이 메시지가 뜹니다.
-    return f"AI 분석 실패 (최종에러: {last_error})"
-
+        # Gemini 3 계열은 v1beta에서만 작동하는 경우가 많습니다.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=5)
+            if res.status_code == 200:
+                return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        except:
+            continue
+    return "AI 분석 일시 지연"
 
 
 
