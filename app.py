@@ -656,13 +656,13 @@ def run_dashboard():
         fig.add_trace(go.Bar(x=spy126.index, y=spy126['Volume'], name="Volume", marker_color="steelblue"), row=3, col=1)
         fig.update_layout(xaxis_rangeslider_visible=False, height=650, template="plotly_dark", margin=dict(t=10, b=10), paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
         st.plotly_chart(fig, use_container_width=True)
-    if r_signal.get('scores'):
-        st.subheader("모멘텀 스코어 (Momentum Scores)")
-        sc_df = pd.DataFrame([
-            {"Ticker": t, "Score": s, "TOP1": "★" if t in r_signal['top2'] else ""}
-            for t, s in sorted(r_signal['scores'].items(), key=lambda x: x[1], reverse=True)
-        ])
-        st.dataframe(sc_df, use_container_width=True, hide_index=True)
+        if r_signal.get('scores'):
+            st.subheader("모멘텀 스코어 (Momentum Scores)")
+            sc_df = pd.DataFrame([
+                {"Ticker": t, "Score": s, "TOP1": "★" if t in r_signal['top2'] else ""}
+                for t, s in sorted(r_signal['scores'].items(), key=lambda x: x[1], reverse=True)
+            ])
+            st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
 
     with tab2:
