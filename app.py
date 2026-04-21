@@ -391,25 +391,29 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # [핵심 수정] v1beta 대신 정식 버전인 v1 주소를 사용합니다.
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
         
-        # [수정] 응답 구조 확인 절차 강화
-        if 'candidates' in res_json and len(res_json['candidates']) > 0:
+        # 응답 구조가 정식 버전(v1)에 맞게 텍스트를 추출합니다.
+        if 'candidates' in res_json:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        elif 'error' in res_json:
-            return f"AI 에러: {res_json['error'].get('message', 'Unknown')}"
         else:
-            return "AI 분석 일시 지연 (응답 구조 이상)"
+            # 에러 메시지를 더 구체적으로 봅니다.
+            return f"AI 응답 지연: {res_json.get('error', {}).get('message', 'Unknown Error')}"
     except Exception as e:
-        return f"AI 분석 실패 (원인: {str(e)[:20]})"
+        return f"AI 연결 실패 (원인: {str(e)[:20]})"
+
 
 
 
