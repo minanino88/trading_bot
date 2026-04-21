@@ -2,7 +2,7 @@ name: Unified Trading Bot v1.0
 
 on:
   schedule:
-    - cron: '0 10 * * 1-5'   # KST 20:00 (월~금)
+    - cron: '0 11 * * 1-5'   # KST 20:00 (월~금)
     - cron: '0 16 * * 0-4'   # KST 01:00 (화~토 새벽)
     - cron: '0 22 * * 0-4'   # KST 07:00 (화~토 아침)
   workflow_dispatch:
