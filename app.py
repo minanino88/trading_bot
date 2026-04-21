@@ -183,12 +183,17 @@ def get_market_data():
 # 4. 신호 로직
 # ==============================================================
 
+
 def get_upro_signal(spy_close, monthly, vix_close):
+    state = {"in_market": True, "last_exit_price": 0}
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
-    else:
-        state = {"in_market": True, "last_exit_price": 0}
+        try:
+            with open(STATE_FILE, 'r') as f:
+                content = f.read().strip()
+            if content:
+                state = json.loads(content)
+        except:
+            pass
         
     if spy_close.empty or len(spy_close) < 20:
         return "WAIT", "Loading", 0.0, state
