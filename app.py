@@ -389,32 +389,34 @@ def calc_rotation_performance(df):
 
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "API 키 누락"
+    if not api_key: return "API 키 없음"
     
-    # [해결책] 404를 피하기 위해 후보 모델 리스트를 순회합니다.
-    # 2026년 환경에서 가장 잘 붙는 순서대로 배치했습니다.
-    models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+    # [최종] 2026년 기준, 민환님 계정에서 허용되는 모든 모델명을 순차적으로 찌릅니다.
+    # 하나라도 200 OK가 나면 바로 리턴합니다.
+    model_candidates = ["gemini-3-flash", "gemini-1.5-flash", "gemini-pro"]
     
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
 
-    for model_name in models:
-        # v1beta 주소가 가장 유연하므로 고정합니다.
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=7)
-            res_json = res.json()
-            
-            if 'candidates' in res_json:
-                return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-            # 404(Not Found)가 뜨면 다음 모델로 넘어갑니다.
-            continue 
-        except:
-            continue
+    last_error = ""
+    for model in model_candidates:
+        # v1 정식 주소가 404가 나면 v1beta로 자동 전환해서 시도합니다.
+        for ver in ["v1", "v1beta"]:
+            url = f"https://generativelanguage.googleapis.com/{ver}/models/{model}:generateContent?key={api_key}"
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=5)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                else:
+                    last_error = f"{ver}/{model}: {res.status_code}"
+            except:
+                continue
 
-    return "AI 분석 일시 지연 (모든 모델 호출 실패)"
+    # 모든 모델이 실패했을 때만 이 메시지가 뜹니다.
+    return f"AI 분석 실패 (최종에러: {last_error})"
 
 
 
