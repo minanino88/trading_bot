@@ -142,29 +142,33 @@ class KIS_Trader:
             return 0.0
 
     def send_order(self, ticker, qty, side="BUY"):
-        if not self.token:
-            return {"rt_cd": "1", "msg1": "No Token"}
+        if not self.token: return {"rt_cd": "1", "msg1": "No Token"}
         try:
-            url       = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
-            tr_id     = "TTTT1002U" if side == "BUY" else "TTTT1006U"
-            clean_qty = str(int(float(qty)))
+            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
+            tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
+            
+            # 현재가를 가져와서 지정가로 응찰 (시장가 에러 방지)
+            curr_p = self.get_current_price(ticker)
+            if curr_p <= 0: return {"rt_cd": "1", "msg1": "Price Fetch Fail"}
+            
+            # 매수 시 현재가+1% (최우선 체결), 매도 시 현재가-1%
+            ord_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
+            
             data = {
                 "CANO":            self.cano,
                 "ACNT_PRDT_CD":    self.acnt_prdt_cd,
-                "OVRS_EXCG_CD":    "AMEX",
+                "OVRS_EXCG_CD":    "AMEX",  # NYSE Arca 대응 (UPRO 필수)
                 "PDNO":            ticker,
-                "ORD_QTY":         clean_qty,
-                "OVRS_ORD_UNPR":   "0",
+                "ORD_QTY":         str(int(float(qty))),
+                "OVRS_ORD_UNPR":   f"{ord_p:.2f}", # 시장가 "0" 대신 실제 가격 전송
                 "ORD_SVR_DVSN_CD": "0",
-                "ORD_DVSN":        "00",
+                "ORD_DVSN":        "00", # 지정가 응찰
             }
-            res = requests.post(url, headers=self._headers(tr_id),
-                                data=json.dumps(data)).json()
-            print(f"[KIS] {side} {ticker} {clean_qty}주 -> rt_cd={res.get('rt_cd')} msg={res.get('msg1','')[:100]}")
+            res = requests.post(url, headers=self._headers(tr_id), data=json.dumps(data)).json()
             return res
         except Exception as e:
-            print(f"[KIS] 주문 요청 에러: {e}")
             return {"rt_cd": "1", "msg1": str(e)}
+
 
 # ==============================================================
 # 3. 시장 데이터
