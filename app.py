@@ -389,27 +389,25 @@ def calc_rotation_performance(df):
 
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "API 키 누락"
+    if not api_key: return "API 키 없음"
     
-    # 2026년 4월 현재 공식적으로 지원되는 모델 ID 리스트입니다.
-    # v1beta 경로에서 아래 이름들은 100% 작동합니다.
-    models = ["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"]
-    
+    # 2026년 표준 모델명인 gemini-2.0-flash를 사용하고 v1beta 경로로 접속합니다.
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    headers = {'Content-Type': 'application/json'}
 
-    for model_name in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=7)
-            if res.status_code == 200:
-                return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        except:
-            continue
-
-    return "AI 분석 일시 지연 (2026년 표준 모델 호출 실패)"
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        res_json = res.json()
+        if 'candidates' in res_json:
+            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+        else:
+            # 404가 날 경우를 대비해 실제 에러 원인을 텔레그램에 찍습니다.
+            return f"AI 지연({res.status_code}): {res_json.get('error', {}).get('message', 'Model Error')[:30]}"
+    except:
+        return "AI 연결 실패"
 
 
 
