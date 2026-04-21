@@ -391,28 +391,27 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     
-    # [핵심 수정] v1beta 대신 정식 버전인 v1 주소를 사용합니다.
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # [2026년 최신] gemini-1.5-flash 대신 gemini-3-flash를 사용합니다.
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}, TOP2 {r_sig.get('top2')}. "
               "Korean 150자 내외: 1.시장평가 2.리스크 대응")
     
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
         
-        # 응답 구조가 정식 버전(v1)에 맞게 텍스트를 추출합니다.
         if 'candidates' in res_json:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            # 에러 메시지를 더 구체적으로 봅니다.
-            return f"AI 응답 지연: {res_json.get('error', {}).get('message', 'Unknown Error')}"
+            # 모델을 못 찾는 에러가 나면 하위 호환용 모델로 재시도
+            fallback_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={api_key}"
+            res = requests.post(fallback_url, headers=headers, json=payload, timeout=10)
+            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        return f"AI 연결 실패 (원인: {str(e)[:20]})"
+        return f"AI 서비스 일시 지연 (주문 로직은 영향 없음)"
 
 
 
@@ -456,44 +455,59 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state)
 
-    # 20시 정규 매매
+    # 20시 정규 매매 (현재 0시 테스트 중이면 0 유지)
     if current_hour == 0:
         bal = trader.get_balance()
         msgs = [f"🤖 <b>통합봇 정규매매 [{now_kst.strftime('%m/%d %H:%M')} KST]</b>", f"잔고: ${bal:,.2f}"]
         
-        # [A] UPRO
-        upro_budget, cur_p_upro, qty_upro = bal * UPRO_RATIO, trader.get_current_price(TRADE_TICKER), trader.get_holdings(TRADE_TICKER)
+        # ------------------------------------------------------
+        # [A] UPRO 섹션 (실행 + 로그 + 보고)
+        # ------------------------------------------------------
+        upro_budget, cur_p_upro = bal * UPRO_RATIO, trader.get_current_price(TRADE_TICKER)
+        qty_upro = trader.get_holdings(TRADE_TICKER)
+        
         if u_sig in ["KEEP", "RE-ENTER"] and qty_upro == 0 and cur_p_upro > 0:
             buy_qty = int((upro_budget * 0.95) / cur_p_upro)
-            if buy_qty >= 1 and trader.send_order(TRADE_TICKER, buy_qty, "BUY").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매수: {buy_qty}주")
-                with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
-                pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": buy_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+            if buy_qty >= 1:
+                res = trader.send_order(TRADE_TICKER, buy_qty, "BUY")
+                if res.get('rt_cd') == '0':
+                    msgs.append(f"✅ UPRO 매수: {buy_qty}주")
+                    with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
+                    # CSV 로그 기록 유지
+                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": buy_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                else: msgs.append(f"❌ UPRO 매수실패: {res.get('msg1')}")
         elif u_sig == "EXIT" and qty_upro > 0:
-            if trader.send_order(TRADE_TICKER, qty_upro, "SELL").get('rt_cd') == '0':
+            res = trader.send_order(TRADE_TICKER, qty_upro, "SELL")
+            if res.get('rt_cd') == '0':
                 msgs.append(f"✅ UPRO 매도: {qty_upro}주")
                 with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
+                # CSV 로그 기록 유지
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": qty_upro, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
-        else: msgs.append(f"UPRO: {u_sig} ({u_re})")
+        else:
+            msgs.append(f"📈 UPRO 유지 ({u_sig})")
 
-        # [B] Rotation 봇 (매도 로직 & 상태 보고 완결)
+        # ------------------------------------------------------
+        # [B] Rotation 섹션 (실행 + 로그 + 보고)
+        # ------------------------------------------------------
         action, top2, rot_budget = r_sig['action'], r_sig['top2'], bal * ROTATION_RATIO
-        print(f"[ROT] action={action}, top2={top2}")
-
+        
         if action in ["ENTER", "ROTATE"]:
-            # 1. 기존 종목 전량 청산 (교체 매매의 핵심)
-            if rot_state['in_market']:
+            # 1. 기존 종목 청산
+            if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
                     qty_h = trader.get_holdings(h['ticker'])
                     if qty_h > 0:
                         res = trader.send_order(h['ticker'], qty_h, "SELL")
                         if res.get('rt_cd') == '0':
                             msgs.append(f"✅ ROT 매도(교체): {h['ticker']}")
-                time.sleep(2) # 한투 API 연사 제한 방지
+                            # ROT CSV 로그 기록
+                            cur_p_h = trader.get_current_price(h['ticker'])
+                            ret = (cur_p_h - h.get('entry_price', cur_p_h)) / max(h.get('entry_price', cur_p_h), 1) * 100
+                            pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": qty_h, "Price": cur_p_h, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                time.sleep(2)
 
             # 2. 신규 종목 매수
-            new_h = []
-            per_stock = (rot_budget * 0.95) / len(top2) if top2 else 0
+            new_h, per_stock = [], (rot_budget * 0.95) / len(top2) if top2 else 0
             for t in top2:
                 p = trader.get_current_price(t)
                 qty = int(per_stock / p) if p > 0 else 0
@@ -502,6 +516,7 @@ async def run_trading():
                     if res.get('rt_cd') == '0':
                         msgs.append(f"✅ ROT 매수: {t} ({qty}주)")
                         new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                     else:
                         msgs.append(f"❌ ROT 실패({t}): {res.get('msg1')}")
             
@@ -510,29 +525,26 @@ async def run_trading():
                 save_rotation_state(rot_state)
         
         elif action == "KEEP":
-            # 보유 중일 때 침묵 방지
             hold_list = [h['ticker'] for h in rot_state.get('holdings', [])]
             msgs.append(f"💎 ROT 유지: {', '.join(hold_list) if hold_list else '보유 종목 없음'}")
             
         elif action == "WAIT":
-            msgs.append(f"⏳ ROT 관망: 시장 조건 미달 (VIX: {r_sig.get('vix_now', 0):.1f})")
+            msgs.append(f"⏳ ROT 관망 (VIX: {r_sig.get('vix_now', 0):.1f})")
 
         elif action == "EXIT":
-            # 🚨 2번 질문 주신 부분: EXIT 시 실제 매도 실행
-            if rot_state['in_market']:
+            if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
                     qty_h = trader.get_holdings(h['ticker'])
-                    if qty_h > 0:
-                        res = trader.send_order(h['ticker'], qty_h, "SELL")
-                        if res.get('rt_cd') == '0':
-                            msgs.append(f"✅ ROT 청산 매도: {h['ticker']}")
+                    if qty_h > 0: trader.send_order(h['ticker'], qty_h, "SELL")
                 rot_state.update({"in_market": False, "holdings": []})
                 save_rotation_state(rot_state)
-            msgs.append("🚨 ROT 모든 포지션 정리 완료")
+            msgs.append("🚨 ROT 하락장 대응 전량 청산")
 
-        
+        # AI 분석 호출
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
         await tg_send(bot, chat_id, "\n".join(msgs))
+
+    # (이후 hour 1, 7 로직은 동일)
 
     elif current_hour == 1:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
