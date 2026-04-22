@@ -706,69 +706,81 @@ def run_dashboard():
 
         st.divider()
 
-        # ======================================================
-        # 2. 백테스트 시뮬레이션 (2020~2026, Base 100 적용)
-        # ======================================================
-        st.subheader("📊 백테스트 시뮬레이션 (2020-2026, Base 100)")
+        # (기존 하드코딩 백테스트 차트 코드 끝부분)
+        st.plotly_chart(fig_b, use_container_width=True, key="bt_main_chart_v3")
 
-        bt_sp500 = [
-            -0.082,-0.125, 0.128, 0.127, 0.045, 0.019, 0.057, 0.070,-0.036,-0.028, 0.107, 0.038, # 2020
-            -0.011, 0.028, 0.044, 0.053, 0.005, 0.023, 0.024, 0.029,-0.047, 0.069,-0.008, 0.045, # 2021
-            -0.053,-0.030, 0.035,-0.087,-0.006,-0.082, 0.092,-0.041,-0.094, 0.079, 0.054,-0.058, # 2022
-            0.062,-0.025, 0.035, 0.015,-0.001, 0.065, 0.031,-0.017,-0.048,-0.022, 0.087, 0.044, # 2023
-            0.016, 0.052, 0.031,-0.041, 0.048, 0.035, 0.011, 0.024, 0.022,-0.009, 0.057,-0.024, # 2024
-            -0.012,-0.018,-0.058,-0.082, 0.065, 0.038, 0.042, 0.018, 0.025, 0.031, 0.044, 0.019, 0.008,-0.021,-0.048, 0.092 # 2025-26
-        ]
+        # ------------------------------------------------------
+        # 4. 실시간 데이터 기반 백테스트 (v3.6.9 로직 강화)
+        # ------------------------------------------------------
+        st.divider()
+        st.subheader("📊 실시간 데이터 기반 백테스트 (Real Market Data)")
 
-        # [민환님 Snippet 로직 적용]
-        st_hist, bh_hist = [100.0], [100.0]
-        in_m, c_d, cap_st, cap_bh, spy_p, last_ex_p = True, 0, 100.0, 100.0, 100.0, 100.0
-
-        for r in bt_sp500:
-            spy_p *= (1 + r)
-            cap_bh *= (1 + r)
-            bh_hist.append(cap_bh)
+        try:
+            # 버그 2 수정: auto_adjust 반영 및 MultiIndex 처리
+            spy_raw = yf.download("SPY", start="2020-01-01", interval="1mo",
+                                   progress=False, auto_adjust=True)
+            if isinstance(spy_raw.columns, pd.MultiIndex):
+                spy_raw.columns = spy_raw.columns.get_level_values(0)
             
-            if in_m:
-                if r < 0: c_d += 1
-                else: c_d = 0
-                
-                if c_d >= 2:
-                    in_m, last_ex_p, ret_st = False, spy_p, 0
+            spy_data  = spy_raw['Close'].squeeze()
+            bt_real   = spy_data.pct_change().dropna()
+            bt_dates  = bt_real.index
+            LEVERAGE_COST = 0.0008 # UPRO 비용 반영
+
+            st_hist, bh_hist = [100.0], [100.0]
+            cap_st, cap_bh = 100.0, 100.0
+            spy_p, last_ex_p = 100.0, 100.0
+            in_m, c_d = True, 0
+
+            for r in bt_real:
+                r = float(r)
+                spy_p  *= (1 + r)
+                cap_bh *= (1 + r)
+                bh_hist.append(cap_bh)
+
+                if in_m:
+                    # 버그 3 수정: 수익 적용 후 탈출 여부 판단 (v3.6.9 로직)
+                    ret_st = (r * 3) - 0.001 - LEVERAGE_COST
+                    c_d = c_d + 1 if r < 0 else 0
+                    if c_d >= 2:
+                        in_m      = False
+                        last_ex_p = spy_p
                 else:
-                    ret_st = r * 3 - 0.001 # 3배 레버리지 및 수수료
-            else:
-                rebound = (spy_p - last_ex_p) / last_ex_p if last_ex_p > 0 else 0
-                if rebound >= 0.02:
-                    in_m, c_d, ret_st = True, 0, r * 3 - 0.001
-                else:
-                    ret_st = 0
+                    rebound = (spy_p - last_ex_p) / last_ex_p if last_ex_p > 0 else 0
+                    if rebound >= 0.02:
+                        in_m  = True
+                        c_d   = 0
+                        ret_st = (r * 3) - 0.001 - LEVERAGE_COST
+                    else:
+                        ret_st = 0.0
+
+                cap_st *= (1 + ret_st)
+                st_hist.append(cap_st)
+
+            # 날짜 축 생성
+            x_axis = [spy_data.index[0].strftime('%y-%m')] + \
+                     [d.strftime('%y-%m') for d in bt_dates]
+
+            # 시각화 (v3.6.9 스타일 적용)
+            fig_rbt = go.Figure()
+            fig_rbt.add_trace(go.Scatter(x=x_axis, y=st_hist,
+                                          name='전략(UPRO 3x)',
+                                          line=dict(color='#58a6ff', width=3)))
+            fig_rbt.add_trace(go.Scatter(x=x_axis, y=bh_hist,
+                                          name='SPY B&H',
+                                          line=dict(color='grey', dash='dot', width=2)))
             
-            cap_st *= (1 + ret_st)
-            st_hist.append(cap_st)
+            fig_rbt.update_layout(template='plotly_dark', height=380,
+                                   yaxis_title="자산 지수 (시작=100)",
+                                   margin=dict(t=30, b=20, l=20, r=20),
+                                   legend=dict(orientation="h", y=1.05, x=1),
+                                   paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
+            
+            st.plotly_chart(fig_rbt, use_container_width=True, key="real_bt_chart_v2")
+            st.caption("야후 파이낸스 실제 SPY 데이터 기반 (배당 재투자 반영) | UPRO 운용비용 월 0.08% 반영")
 
-        # 날짜축 생성 (2020-01-01 시작)
-        chart_dates = pd.date_range(start='2020-01-01', periods=len(bt_sp500), freq='ME')
-        dates_formatted = [d.strftime('%y-%m') for d in chart_dates]
-        x_axis = ['20-01'] + dates_formatted
-
-        # 바 차트 (SPY 월별 수익률)
-        fig_bar = go.Figure(go.Bar(x=dates_formatted, y=bt_sp500, marker_color=['#3fb950' if x > 0 else '#f85149' for x in bt_sp500]))
-        fig_bar.update_layout(template='plotly_dark', height=200, margin=dict(t=20,b=20,l=20,r=20), yaxis=dict(tickformat=".1%"))
-        st.plotly_chart(fig_bar, use_container_width=True, key="bt_bar_v4")
-
-        # 수익률 곡선 비교 (Base 100)
-        fig_curve = go.Figure()
-        fig_curve.add_trace(go.Scatter(x=x_axis, y=st_hist, name='Strategy', line=dict(color='#3fb950', width=3)))
-        fig_curve.add_trace(go.Scatter(x=x_axis, y=bh_hist, name='SPY B&H', line=dict(color='gray', dash='dash', width=2)))
-        fig_curve.update_layout(
-            template='plotly_dark', 
-            height=350, 
-            yaxis_title="Equity (Base 100)",
-            margin=dict(t=20, b=20, l=20, r=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        st.plotly_chart(fig_curve, use_container_width=True, key="bt_curve_v4")
+        except Exception as e:
+            st.warning(f"실시간 데이터 로드 실패: {e}")
 
 
     with tab3:
