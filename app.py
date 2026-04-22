@@ -390,28 +390,34 @@ def calc_rotation_performance(df):
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
-    
-    # [최종 해결] v1beta가 아닌 v1 정식 경로를 사용합니다.
-    # 모델명은 가장 표준적인 gemini-1.5-flash를 사용하되, 
-    # 404 발생 시 원인을 정확히 알 수 있도록 에러 로직을 강화했습니다.
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
+
     prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}. "
               "한국어 150자: 시장 리스크와 대응 전략 요약.")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {'Content-Type': 'application/json'}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        res_json = res.json()
-        
-        if res.status_code == 200 and 'candidates' in res_json:
-            return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-        
-        # 404 발생 시 단순히 "지연"이라 하지 않고 원인을 출력합니다.
-        err_msg = res_json.get('error', {}).get('message', 'Unknown Error')
-        return f"AI 지연 (Error {res.status_code}: {err_msg[:40]})"
-    except:
-        return "AI 연결 실패"
+    # 작동하는 모델 찾을 때까지 순서대로 시도
+    candidates = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+    ]
+
+    for base_url in candidates:
+        url = f"{base_url}?key={api_key}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            res_json = res.json()
+            if res.status_code == 200 and 'candidates' in res_json:
+                model_name = base_url.split('/models/')[1].split(':')[0]
+                print(f"[GEMINI] 성공: {model_name}")
+                return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            print(f"[GEMINI] {base_url.split('/models/')[1].split(':')[0]} 실패: {res.status_code}")
+        except Exception as e:
+            print(f"[GEMINI] 연결 오류: {e}")
+            continue
+
+    return "AI 분석 일시 불가"
 
 
 
