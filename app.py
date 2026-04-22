@@ -390,9 +390,15 @@ def calc_rotation_performance(df):
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
+        
+    prompt = (
+        f"너는 전문적인 퀀트 투자 분석가야. 아래 신호를 바탕으로 분석해줘.\n"
+        f"1. UPRO: S&P 500 지수 3배 추종 레버리지 ETF\n"
+        f"2. ROT: 기술주 모멘텀 로테이션 전략\n"
+        f"현재 신호: UPRO={u_sig}, ROT={r_sig.get('action')}\n"
+        f"조건: 위 단어들을 전문 용어로 풀이하지 말고, 주식 투자 관점에서 현재 시장 리스크와 대응 전략을 한국어 150자 내외로 요약해줘."
+    )
 
-    prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}. "
-              "한국어 150자: 시장 리스크와 대응 전략 요약.")
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
 
