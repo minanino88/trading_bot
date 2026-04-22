@@ -747,41 +747,6 @@ def run_dashboard():
 
         st.divider()
 
-        # ======================================================
-        # 3. 백테스트 시뮬레이션 (하드코딩 2020~2026)
-        # ======================================================
-        st.subheader("📊 백테스트 시뮬레이션 (2020-2026, Base 100)")
-        
-        bt_sp500 = [-0.082,-0.125, 0.128, 0.127, 0.045, 0.019, 0.057, 0.070,-0.036,-0.028, 0.107, 0.038,
-                    -0.011, 0.028, 0.044, 0.053, 0.005, 0.023, 0.024, 0.029,-0.047, 0.069,-0.008, 0.045,
-                    -0.053,-0.030, 0.035,-0.087,-0.006,-0.082, 0.092,-0.041,-0.094, 0.079, 0.054,-0.058,
-                    0.062,-0.025, 0.035, 0.015,-0.001, 0.065, 0.031,-0.017,-0.048,-0.022, 0.087, 0.044,
-                    0.016, 0.052, 0.031,-0.041, 0.048, 0.035, 0.011, 0.024, 0.022,-0.009, 0.057,-0.024,
-                    -0.012,-0.018,-0.058,-0.082, 0.065, 0.038, 0.042, 0.018, 0.025, 0.031, 0.044, 0.019, 0.008,-0.021,-0.048, 0.092]
-
-        st_hist, bh_hist = [100.0], [100.0]
-        in_m, c_d, spy_p, last_ex_p, cap_st, cap_bh = True, 0, 100.0, 100.0, 100.0, 100.0
-        
-        for r in bt_sp500:
-            spy_p *= (1+r); cap_bh *= (1+r); bh_hist.append(cap_bh)
-            if in_m:
-                ret_st = r * 3 - 0.001
-                c_d = c_d + 1 if r < 0 else 0
-                if c_d >= 2: in_m, last_ex_p = False, spy_p
-            else:
-                rebound = (spy_p - last_ex_p) / last_ex_p if last_ex_p > 0 else 0
-                if rebound >= 0.02: in_m, c_d, ret_st = True, 0, r * 3 - 0.001
-                else: ret_st = 0
-            cap_st *= (1+ret_st); st_hist.append(cap_st)
-
-        chart_dates = pd.date_range(start='2020-01-01', periods=len(bt_sp500), freq='ME')
-        x_axis = ['20-01'] + [d.strftime('%y-%m') for d in chart_dates]
-        
-        fig_b = go.Figure()
-        fig_b.add_trace(go.Scatter(x=x_axis, y=st_hist, name="Strategy (3x)", line=dict(color='#3fb950', width=3)))
-        fig_b.add_trace(go.Scatter(x=x_axis, y=bh_hist, name="SPY B&H", line=dict(color='grey', dash='dash', width=2)))
-        fig_b.update_layout(template='plotly_dark', height=350, yaxis_title="Equity (Base 100)", margin=dict(t=20,b=20,l=20,r=20), legend=dict(orientation="h", y=1.05, x=1))
-        st.plotly_chart(fig_b, use_container_width=True, key="hardcoded_bt_final")
 
         # ======================================================
         # 4. 실시간 데이터 기반 백테스트 (Real Market Data)
