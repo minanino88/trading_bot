@@ -475,16 +475,36 @@ async def run_trading():
     # ------------------------------------------------------
     # 1. 정규 매매 섹션 (사용자 설정 시간에 실행)
     # ------------------------------------------------------
-    if current_hour == 20: # 민환님 설정에 따라 0 또는 7로 조정
+    if current_hour == 20:
+        # 1. 기초 데이터 로드
         bal = trader.get_balance()
-        msgs = [f"🤖 <b>통합봇 정규매매 [{now_kst.strftime('%m/%d %H:%M')} KST]</b>", f"잔고: ${bal:,.2f}"]
+        cur_p_upro = trader.get_current_price(TRADE_TICKER)
+        qty_upro   = trader.get_holdings(TRADE_TICKER)
         
-        # [A] UPRO 섹션
-        upro_budget, cur_p_upro = bal * UPRO_RATIO, trader.get_current_price(TRADE_TICKER)
-        qty_upro = trader.get_holdings(TRADE_TICKER)
+        # 2. 현재 보유 가치 계산 (UPRO + ROT)
+        upro_value = qty_upro * cur_p_upro
+        # Rotation 보유 가치 합산 (이미 들고 있는 종목이 있다면 합쳐야 함)
+        rot_value = sum(trader.get_holdings(h['ticker']) * trader.get_current_price(h['ticker']) 
+                        for h in rot_state.get('holdings', []))
         
-        if u_sig in ["KEEP", "RE-ENTER"] and qty_upro == 0 and cur_p_upro > 0:
-            buy_qty = int((upro_budget * 0.95) / cur_p_upro)
+        # [핵심] 진짜 총자산 (현금 + 모든 주식 평가금액)
+        total_equity = bal + upro_value + rot_value
+        
+        # 3. 전략별 목표 예산 (Target Budget)
+        upro_target = total_equity * UPRO_RATIO
+        rot_target  = total_equity * ROTATION_RATIO
+        
+        msgs = [f"🤖 <b>통합봇 [{now_kst.strftime('%m/%d %H:%M')} KST]</b>",
+                f"총자산: ${total_equity:,.2f} (현금: ${bal:,.2f})",
+                f"UPRO평가: ${upro_value:,.2f} | ROT평가: ${rot_value:,.2f}"]
+
+        # [A] UPRO 섹션: 목표치 대비 부족할 때만 매수
+        # upro_gap이 음수면 이미 목표치 초과이므로 매수하지 않음 (Safety Margin)
+        upro_gap = max(0, upro_target - upro_value)
+        
+        if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
+            # 목표 예산의 10% 이상 부족할 때만 추가 매수 (잦은 매매 방지)
+            buy_qty = int((upro_gap * 0.95) / cur_p_upro)
             if buy_qty >= 1:
                 res = trader.send_order(TRADE_TICKER, buy_qty, "BUY")
                 if res.get('rt_cd') == '0':
@@ -501,7 +521,9 @@ async def run_trading():
         else: msgs.append(f"📈 UPRO 유지 ({u_sig})")
 
         # [B] Rotation 섹션
-        action, top2, rot_budget = r_sig['action'], r_sig['top2'], bal * ROTATION_RATIO
+        # bal * ROTATION_RATIO 대신 위에서 계산한 rot_target 사용!
+        action, top2, rot_budget = r_sig['action'], r_sig['top2'], rot_target
+        
         if action in ["ENTER", "ROTATE"]:
             if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
