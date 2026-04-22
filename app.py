@@ -670,10 +670,10 @@ def run_dashboard():
             st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
 
-     with tab2:
-        # ======================================================
-        # 1. UPRO 전략 성과 요약
-        # ======================================================
+    with tab2:
+        # ------------------------------------------------------
+        # 1. UPRO 전략 성과 요약 (Trend Following)
+        # ------------------------------------------------------
         st.subheader("🚀 UPRO 전략 성과 (Trend Following)")
         u1, u2, u3, u4 = st.columns(4)
 
@@ -690,28 +690,23 @@ def run_dashboard():
             st.metric("승/패",        f"{upro_perf['win_trades']}/{upro_perf['loss_trades']}")
             st.metric("최대 손실",    f"{upro_perf['worst_trade']:+.1f}%")
 
-        # UPRO 실제 자산 곡선 (ID 중복 방지 key='upro_equity' 추가)
+        # [ID 중복 방지: upro_real_chart]
         if upro_perf.get('equity_curve'):
             eq_u = pd.DataFrame(upro_perf['equity_curve'])
-            fig_upro = go.Figure()
-            fig_upro.add_trace(go.Scatter(
+            fig_upro = go.Figure(go.Scatter(
                 x=eq_u['date'], y=eq_u['equity'],
                 fill='tozeroy', line=dict(color='#3fb950', width=2),
                 name='UPRO 실제 자산'
             ))
-            fig_upro.update_layout(
-                template='plotly_dark', height=250,
-                margin=dict(t=20, b=20, l=20, r=20),
-                paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
-                yaxis_title="누적 수익 (시작=100)"
-            )
-            st.plotly_chart(fig_upro, use_container_width=True, key="upro_equity_chart")
+            fig_upro.update_layout(template='plotly_dark', height=280, margin=dict(t=20,b=20,l=20,r=20),
+                                  paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e', yaxis_title="누적 수익 (시작=100)")
+            st.plotly_chart(fig_upro, use_container_width=True, key="upro_real_chart")
 
         st.divider()
 
-        # ======================================================
-        # 2. Rotation 봇 성과 요약
-        # ======================================================
+        # ------------------------------------------------------
+        # 2. Rotation 봇 성과 요약 (Tech Momentum)
+        # ------------------------------------------------------
         st.subheader("🔄 Rotation 봇 성과 (Tech Momentum)")
         r1, r2, r3, r4 = st.columns(4)
 
@@ -719,46 +714,40 @@ def run_dashboard():
             st.metric("총 수익률",    f"{rot_perf['total_return']:+.1f}%")
             st.metric("거래 횟수",    f"{rot_perf['total_trades']}회")
         with r2:
-            st.metric("최대 낙폭(MDD)", f"-{rot_perf['mdd']:.1f}%")
-            st.metric("승률",          f"{rot_perf['win_rate']:.0f}%")
+            st.metric("MDD",         f"-{rot_perf['mdd']:.1f}%")
+            st.metric("승률",        f"{rot_perf['win_rate']:.0f}%")
         with r3:
-            st.metric("샤프 지수",    f"{rot_perf['sharpe']:.2f}")
-            st.metric("최대 수익",    f"{rot_perf['best_trade']:+.1f}%")
+            st.metric("샤프",        f"{rot_perf['sharpe']:.2f}")
+            st.metric("최대 수익",   f"{rot_perf['best_trade']:+.1f}%")
         with r4:
-            st.metric("승/패",        f"{rot_perf['win_trades']}/{rot_perf['loss_trades']}")
-            st.metric("최대 손실",    f"{rot_perf['worst_trade']:+.1f}%")
+            st.metric("승/패",       f"{rot_perf['win_trades']}/{rot_perf['loss_trades']}")
+            st.metric("최대 손실",   f"{rot_perf['worst_trade']:+.1f}%")
 
-        # Rotation 실제 자산 곡선 (ID 중복 방지 key='rot_equity' 추가)
+        # [ID 중복 방지: rot_real_chart]
         if rot_perf.get('equity_curve'):
             eq_r = pd.DataFrame(rot_perf['equity_curve'])
-            fig_rot = go.Figure()
-            fig_rot.add_trace(go.Scatter(
+            fig_rot = go.Figure(go.Scatter(
                 x=eq_r['date'], y=eq_r['equity'],
                 fill='tozeroy', line=dict(color='#fbbf24', width=2),
                 name='ROT 실제 자산'
             ))
-            fig_rot.update_layout(
-                template='plotly_dark', height=250,
-                margin=dict(t=20, b=20, l=20, r=20),
-                paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e',
-                yaxis_title="누적 수익 (시작=100)"
-            )
-            st.plotly_chart(fig_rot, use_container_width=True, key="rot_equity_chart")
+            fig_rot.update_layout(template='plotly_dark', height=280, margin=dict(t=20,b=20,l=20,r=20),
+                                  paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e', yaxis_title="누적 수익 (시작=100)")
+            st.plotly_chart(fig_rot, use_container_width=True, key="rot_real_chart")
 
         st.divider()
 
-        # ======================================================
+        # ------------------------------------------------------
         # 3. 백테스트 시뮬레이션 (2022~2026)
-        # ======================================================
+        # ------------------------------------------------------
         st.subheader("📊 백테스트 시뮬레이션 (시작자본 $750 / 100만원 기준)")
 
-        bt_sp500 = [-0.053,-0.030,0.035,-0.087,-0.006,-0.082,
-                   0.092,-0.041,-0.094,0.079,0.054,-0.058,0.062,-0.025,
-                   0.035,0.015,-0.001,0.065,0.031,-0.017,-0.048,-0.022,
-                   0.087,0.044,0.016,0.052,0.031,-0.041,0.048,0.035,
-                   0.011,0.024,0.022,-0.009,0.057,-0.024,-0.012,-0.018,
-                   -0.058,-0.082,0.065,0.038,0.042,0.018,0.025,0.031,
-                   0.044,0.019,0.008,-0.021,-0.048,0.092]
+        # bt_sp500 데이터 정의
+        bt_sp500 = [-0.053,-0.030,0.035,-0.087,-0.006,-0.082,0.092,-0.041,-0.094,0.079,0.054,-0.058,
+                    0.062,-0.025,0.035,0.015,-0.001,0.065,0.031,-0.017,-0.048,-0.022,0.087,0.044,
+                    0.016,0.052,0.031,-0.041,0.048,0.035,0.011,0.024,0.022,-0.009,0.057,-0.024,
+                    -0.012,-0.018,-0.058,-0.082,0.065,0.038,0.042,0.018,0.025,0.031,0.044,0.019,
+                    0.008,-0.021,-0.048,0.092]
 
         initial_cap = 750
         strat_cap, spy_cap = initial_cap, initial_cap
@@ -776,23 +765,21 @@ def run_dashboard():
                 if r >= 0.02: in_mkt, drops = True, 0
             strat_hist.append(strat_cap)
 
+        # [Pandas 2.2+ 호환] freq='ME' 적용
         chart_dates = pd.date_range(start='2022-01-01', periods=len(bt_sp500), freq='ME')
         full_dates = chart_dates.insert(0, chart_dates[0] - pd.DateOffset(months=1))
 
-        # 백테스트 바 차트 (key='bt_bar' 추가)
-        fig_m = go.Figure(go.Bar(
-            x=chart_dates, y=bt_sp500, 
-            marker_color=['#3fb950' if x > 0 else '#f85149' for x in bt_sp500]
-        ))
+        # [ID 중복 방지: bt_bar_chart]
+        fig_m = go.Figure(go.Bar(x=chart_dates, y=bt_sp500, marker_color=['#3fb950' if x > 0 else '#f85149' for x in bt_sp500]))
         fig_m.update_layout(template='plotly_dark', height=200, margin=dict(t=20,b=20,l=20,r=20), yaxis=dict(tickformat=".1%"))
-        st.plotly_chart(fig_m, use_container_width=True, key="bt_monthly_bar")
+        st.plotly_chart(fig_m, use_container_width=True, key="bt_bar_chart")
 
-        # 백테스트 곡선 차트 (key='bt_curve' 추가)
+        # [ID 중복 방지: bt_main_chart]
         fig_b = go.Figure()
         fig_b.add_trace(go.Scatter(x=full_dates, y=strat_hist, name="Strategy (3x)", line=dict(color='#58a6ff', width=3)))
         fig_b.add_trace(go.Scatter(x=full_dates, y=spy_hist, name="SPY B&H", line=dict(color='grey', dash='dot', width=2)))
         fig_b.update_layout(template='plotly_dark', height=300, yaxis_title="자산 ($)", margin=dict(t=20,b=20,l=20,r=20), legend=dict(orientation="h", y=1.02, x=1))
-        st.plotly_chart(fig_b, use_container_width=True, key="bt_equity_curve")
+        st.plotly_chart(fig_b, use_container_width=True, key="bt_main_chart")
 
 
     with tab3:
