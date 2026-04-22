@@ -671,21 +671,95 @@ def run_dashboard():
 
 
     with tab2:
-        for label, perf in [("UPRO 트렌드 봇 (70%)", upro_perf), ("모멘텀 로테이션 봇 (30%)", rot_perf)]:
-            st.markdown(f"**{label}**")
-            k1, k2, k3, k4, k5, k6 = st.columns(6)
-            k1.metric("총 수익률", f"{perf['total_return']:+.1f}%")
-            k2.metric("MDD", f"-{perf['mdd']:.1f}%")
-            k3.metric("승률", f"{perf['win_rate']:.0f}%")
-            k4.metric("샤프", f"{perf['sharpe']:.2f}")
-            k5.metric("거래 횟수", f"{perf['total_trades']}회")
-            k6.metric("최대 수익/손실", f"{perf['best_trade']:+.1f}% / {perf['worst_trade']:+.1f}%")
-            if perf['equity_curve']:
-                eq_df = pd.DataFrame(perf['equity_curve'])
-                fig_eq = go.Figure(go.Scatter(x=eq_df['date'], y=eq_df['equity'], fill='tozeroy', line=dict(color='#3fb950', width=2)))
-                fig_eq.update_layout(template='plotly_dark', height=260, margin=dict(t=10, b=10), paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e', yaxis_title="누적 수익 (시작=100)")
-                st.plotly_chart(fig_eq, use_container_width=True)
-            st.divider()
+        # (기존 KPI 카드 및 Equity Curve 코드가 상단에 위치)
+        
+        st.divider()
+        st.subheader("📊 백테스트 시뮬레이션 (시작자본 $750 / 100만원 기준)")
+
+        # 1. 백테스트 로직 연산 (v3.6.9 규격)
+        initial_capital = 750
+        strategy_cap = initial_capital
+        spy_bh_cap = initial_capital
+        
+        strategy_history = [initial_capital]
+        spy_history = [initial_capital]
+        
+        in_market = True
+        consecutive_drops = 0
+        
+        # bt_sp500: 기존 app.py에 정의된 월별 수익률 리스트 사용
+        for ret in bt_sp500:
+            # SPY Buy & Hold 계산
+            spy_bh_cap *= (1 + ret)
+            spy_history.append(spy_bh_cap)
+            
+            # 전략 (UPRO 3x) 계산
+            if in_market:
+                upro_ret = (ret * 3) - 0.001 # 수수료 0.1% 차감
+                strategy_cap *= (1 + upro_ret)
+                
+                # 하락 카운트 체크
+                if ret < 0:
+                    consecutive_drops += 1
+                else:
+                    consecutive_drops = 0
+                
+                # 2개월 연속 하락 시 현금 전환
+                if consecutive_drops >= 2:
+                    in_market = False
+            else:
+                # 현금 보유 상태 (변동 없음)
+                # +2% 반등 시 재진입 로직
+                if ret >= 0.02:
+                    in_market = True
+                    consecutive_drops = 0
+            
+            strategy_history.append(strategy_cap)
+
+        # 차트용 시간축 생성 (2022-01 ~)
+        chart_dates = pd.date_range(start='2022-01-01', periods=len(bt_sp500), freq='M')
+        full_dates = chart_dates.insert(0, chart_dates[0] - pd.DateOffset(months=1))
+
+        # 2. 월별 수익률 바 차트
+        fig_monthly = go.Figure()
+        fig_monthly.add_trace(go.Bar(
+            x=chart_dates, 
+            y=bt_sp500,
+            marker_color=['#3fb950' if r > 0 else '#f85149' for r in bt_sp500],
+            name="SPY Monthly Ret"
+        ))
+        fig_monthly.update_layout(
+            template='plotly_dark',
+            height=250,
+            margin=dict(t=20, b=20, l=20, r=20),
+            showlegend=False,
+            yaxis=dict(tickformat=".1%")
+        )
+        st.plotly_chart(fig_monthly, use_container_width=True)
+
+        # 3. 전략 vs SPY B&H 수익률 곡선
+        fig_equity = go.Figure()
+        fig_equity.add_trace(go.Scatter(
+            x=full_dates, 
+            y=strategy_history, 
+            name="전략 (UPRO Trend)",
+            line=dict(color='#58a6ff', width=3)
+        ))
+        fig_equity.add_trace(go.Scatter(
+            x=full_dates, 
+            y=spy_history, 
+            name="SPY B&H",
+            line=dict(color='grey', dash='dot', width=2)
+        ))
+        fig_equity.update_layout(
+            template='plotly_dark',
+            height=300,
+            yaxis_title="자산 ($)",
+            margin=dict(t=20, b=20, l=20, r=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_equity, use_container_width=True)
+
 
     with tab3:
         col1, col2 = st.columns(2)
