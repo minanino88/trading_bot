@@ -670,7 +670,7 @@ def run_dashboard():
             st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
 
-        with tab2:
+    with tab2:
         # 1. KPI 카드 섹션 (기존 주석 교체)
         st.subheader("🚀 전략 성과 요약 (Performance Summary)")
         
