@@ -670,13 +670,57 @@ def run_dashboard():
             st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
 
-    with tab2:
-        # (기존 KPI 카드 및 Equity Curve 코드가 상단에 위치)
+        with tab2:
+        # 1. KPI 카드 섹션 (기존 주석 교체)
+        st.subheader("🚀 전략 성과 요약 (Performance Summary)")
         
+        # UPRO 및 ROT 성과를 보여주기 위한 컬럼 배치
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # upro_perf, rot_perf 변수가 이미 계산되어 있다는 전제하에 출력
+        with col1:
+            st.metric("총 수익률", f"{upro_perf.get('Total Return', 0):.1%}")
+            st.metric("거래 횟수", f"{upro_perf.get('Trade Count', 0)}회")
+        with col2:
+            st.metric("최대 낙폭 (MDD)", f"{upro_perf.get('MDD', 0):.1%}")
+            st.metric("승률", f"{upro_perf.get('Win Rate', 0):.1%}")
+        with col3:
+            st.metric("샤프 지수", f"{upro_perf.get('Sharpe', 0):.2f}")
+            st.metric("최대 수익", f"{upro_perf.get('Max Win', 0):.1%}")
+        with col4:
+            st.metric("현재 상태", "MARKET IN" if upro_perf.get('In Market') else "CASH")
+            st.metric("최대 손실", f"{upro_perf.get('Max Loss', 0):.1%}")
+
+        # 2. 실시간 자산 곡선 (Equity Curve)
+        # upro_history 등의 데이터가 이미 존재한다는 전제하에 시각화
+        fig_realtime = go.Figure()
+        fig_realtime.add_trace(go.Scatter(
+            y=upro_perf.get('Equity Curve', [0]), 
+            fill='tozeroy', 
+            name='Strategy Equity',
+            line=dict(color='#3fb950', width=2)
+        ))
+        fig_realtime.update_layout(
+            template='plotly_dark',
+            height=300,
+            margin=dict(t=20, b=20, l=20, r=20),
+            yaxis_title="자산 가치 ($)"
+        )
+        st.plotly_chart(fig_realtime, use_container_width=True)
+
         st.divider()
         st.subheader("📊 백테스트 시뮬레이션 (시작자본 $750 / 100만원 기준)")
 
-        # 1. 백테스트 로직 연산 (v3.6.9 규격)
+        # 1. bt_sp500 데이터 정의 (연산 코드 바로 위 추가)
+        bt_sp500 = [-0.053,-0.030,0.035,-0.087,-0.006,-0.082,
+           0.092,-0.041,-0.094,0.079,0.054,-0.058,0.062,-0.025,
+           0.035,0.015,-0.001,0.065,0.031,-0.017,-0.048,-0.022,
+           0.087,0.044,0.016,0.052,0.031,-0.041,0.048,0.035,
+           0.011,0.024,0.022,-0.009,0.057,-0.024,-0.012,-0.018,
+           -0.058,-0.082,0.065,0.038,0.042,0.018,0.025,0.031,
+           0.044,0.019,0.008,-0.021,-0.048,0.092]
+
+        # 2. 백테스트 시뮬레이션 연산
         initial_capital = 750
         strategy_cap = initial_capital
         spy_bh_cap = initial_capital
@@ -687,73 +731,55 @@ def run_dashboard():
         in_market = True
         consecutive_drops = 0
         
-        # bt_sp500: 기존 app.py에 정의된 월별 수익률 리스트 사용
         for ret in bt_sp500:
-            # SPY Buy & Hold 계산
             spy_bh_cap *= (1 + ret)
             spy_history.append(spy_bh_cap)
             
-            # 전략 (UPRO 3x) 계산
             if in_market:
-                upro_ret = (ret * 3) - 0.001 # 수수료 0.1% 차감
+                upro_ret = (ret * 3) - 0.001 # 3배 레버리지 및 수수료 0.1% 차감
                 strategy_cap *= (1 + upro_ret)
                 
-                # 하락 카운트 체크
-                if ret < 0:
-                    consecutive_drops += 1
-                else:
-                    consecutive_drops = 0
+                if ret < 0: consecutive_drops += 1
+                else: consecutive_drops = 0
                 
-                # 2개월 연속 하락 시 현금 전환
-                if consecutive_drops >= 2:
+                if consecutive_drops >= 2: # 2개월 연속 하락 시 탈출
                     in_market = False
             else:
-                # 현금 보유 상태 (변동 없음)
-                # +2% 반등 시 재진입 로직
-                if ret >= 0.02:
+                if ret >= 0.02: # +2% 반등 시 재진입
                     in_market = True
                     consecutive_drops = 0
             
             strategy_history.append(strategy_cap)
 
-        # 차트용 시간축 생성 (2022-01 ~)
         chart_dates = pd.date_range(start='2022-01-01', periods=len(bt_sp500), freq='M')
         full_dates = chart_dates.insert(0, chart_dates[0] - pd.DateOffset(months=1))
 
-        # 2. 월별 수익률 바 차트
+        # 3. 월별 수익률 바 차트
         fig_monthly = go.Figure()
         fig_monthly.add_trace(go.Bar(
             x=chart_dates, 
             y=bt_sp500,
-            marker_color=['#3fb950' if r > 0 else '#f85149' for r in bt_sp500],
-            name="SPY Monthly Ret"
+            marker_color=['#3fb950' if r > 0 else '#f85149' for r in bt_sp500]
         ))
         fig_monthly.update_layout(
-            template='plotly_dark',
-            height=250,
+            template='plotly_dark', height=250,
             margin=dict(t=20, b=20, l=20, r=20),
-            showlegend=False,
             yaxis=dict(tickformat=".1%")
         )
         st.plotly_chart(fig_monthly, use_container_width=True)
 
-        # 3. 전략 vs SPY B&H 수익률 곡선
+        # 4. 전략 vs SPY B&H 수익률 곡선
         fig_equity = go.Figure()
         fig_equity.add_trace(go.Scatter(
-            x=full_dates, 
-            y=strategy_history, 
-            name="전략 (UPRO Trend)",
-            line=dict(color='#58a6ff', width=3)
+            x=full_dates, y=strategy_history, 
+            name="전략 (UPRO Trend)", line=dict(color='#58a6ff', width=3)
         ))
         fig_equity.add_trace(go.Scatter(
-            x=full_dates, 
-            y=spy_history, 
-            name="SPY B&H",
-            line=dict(color='grey', dash='dot', width=2)
+            x=full_dates, y=spy_history, 
+            name="SPY B&H", line=dict(color='grey', dash='dot', width=2)
         ))
         fig_equity.update_layout(
-            template='plotly_dark',
-            height=300,
+            template='plotly_dark', height=300,
             yaxis_title="자산 ($)",
             margin=dict(t=20, b=20, l=20, r=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
