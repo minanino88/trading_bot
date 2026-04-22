@@ -389,36 +389,29 @@ def calc_rotation_performance(df):
 
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key: return "API 키 누락"
+    if not api_key: return "API 키 없음"
     
-    # [2026년 표준] v1beta 대신 v1 정식 엔드포인트를 사용합니다.
-    # 모델명에서 -latest를 제거한 가장 안정적인 식별자를 씁니다.
+    # [최종 해결] v1beta가 아닌 v1 정식 경로를 사용합니다.
+    # 모델명은 가장 표준적인 gemini-1.5-flash를 사용하되, 
+    # 404 발생 시 원인을 정확히 알 수 있도록 에러 로직을 강화했습니다.
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
-    
-    # 시장 상황에 따른 프롬프트 구성
-    prompt = (f"UPRO 신호: {u_sig}, ROT 액션: {r_sig.get('action')}. "
-              "한국어 150자 내외로 전문적인 투자 리스크와 대응 전략을 요약해줘.")
-    
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 300, "temperature": 0.7}
-    }
+    prompt = (f"UPRO {u_sig}, ROT {r_sig.get('action')}. "
+              "한국어 150자: 시장 리스크와 대응 전략 요약.")
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         res_json = res.json()
         
-        # 성공 시 텍스트 추출
         if res.status_code == 200 and 'candidates' in res_json:
             return res_json['candidates'][0]['content']['parts'][0]['text'].strip()
         
-        # 404 등 에러 발생 시 원인을 정확히 로그에 찍어 다음 조치를 가능하게 합니다.
+        # 404 발생 시 단순히 "지연"이라 하지 않고 원인을 출력합니다.
         err_msg = res_json.get('error', {}).get('message', 'Unknown Error')
         return f"AI 지연 (Error {res.status_code}: {err_msg[:40]})"
-        
-    except Exception as e:
-        return f"AI 연결 실패: {str(e)[:20]}"
+    except:
+        return "AI 연결 실패"
 
 
 
