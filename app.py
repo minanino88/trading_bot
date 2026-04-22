@@ -671,69 +671,104 @@ def run_dashboard():
 
 
     with tab2:
-        # [1. UPRO/ROT KPI 섹션 - 이전과 동일하므로 생략 가능하나 구조 유지를 위해 포함]
-        st.subheader("🚀 전략 성과 요약 (UPRO & Rotation)")
+        # ======================================================
+        # 1. UPRO & Rotation 실제 성과 (KPI + 실시간 곡선)
+        # ======================================================
+        st.subheader("🚀 전략별 실제 성과 요약")
+        
+        # UPRO 섹션
         u1, u2, u3, u4 = st.columns(4)
         with u1: st.metric("UPRO 수익률", f"{upro_perf['total_return']:+.1f}%")
-        with u2: st.metric("ROT 수익률", f"{rot_perf['total_return']:+.1f}%")
-        with u3: st.metric("UPRO MDD", f"-{upro_perf['mdd']:.1f}%")
-        with u4: st.metric("ROT MDD", f"-{rot_perf['mdd']:.1f}%")
+        with u2: st.metric("UPRO MDD", f"-{upro_perf['mdd']:.1f}%")
+        with u3: st.metric("UPRO 승률", f"{upro_perf['win_rate']:.0f}%")
+        with u4: st.metric("승/패", f"{upro_perf['win_trades']}/{upro_perf['loss_trades']}")
 
-        # [2. 실제 자산 곡선 (ID 중복 방지 key 적용)]
         if upro_perf.get('equity_curve'):
             eq_u = pd.DataFrame(upro_perf['equity_curve'])
-            fig_ur = go.Figure(go.Scatter(x=eq_u['date'], y=eq_u['equity'], fill='tozeroy', line=dict(color='#3fb950')))
-            fig_ur.update_layout(template='plotly_dark', height=250, margin=dict(t=10,b=10,l=10,r=10), paper_bgcolor='#0a0f1e')
-            st.plotly_chart(fig_ur, use_container_width=True, key="upro_real_final")
+            fig_u = go.Figure(go.Scatter(x=eq_u['date'], y=eq_u['equity'], fill='tozeroy', line=dict(color='#3fb950', width=2), name='UPRO 실제'))
+            fig_u.update_layout(template='plotly_dark', height=250, margin=dict(t=20,b=20,l=20,r=20), paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
+            st.plotly_chart(fig_u, use_container_width=True, key="upro_real_final")
 
         st.divider()
 
-        # [3. 백테스트 시뮬레이션 (v3.6.9 원본 로직 적용)]
-        st.subheader("📊 백테스트 시뮬레이션 (시작자본 $750 / 100만원 기준)")
+        # Rotation 섹션
+        r1, r2, r3, r4 = st.columns(4)
+        with r1: st.metric("ROT 수익률", f"{rot_perf['total_return']:+.1f}%")
+        with r2: st.metric("ROT MDD", f"-{rot_perf['mdd']:.1f}%")
+        with r3: st.metric("ROT 승률", f"{rot_perf['win_rate']:.0f}%")
+        with r4: st.metric("승/패", f"{rot_perf['win_trades']}/{rot_perf['loss_trades']}")
 
-        bt_sp500 = [-0.053,-0.030,0.035,-0.087,-0.006,-0.082,0.092,-0.041,-0.094,0.079,0.054,-0.058,
-                    0.062,-0.025,0.035,0.015,-0.001,0.065,0.031,-0.017,-0.048,-0.022,0.087,0.044,
-                    0.016,0.052,0.031,-0.041,0.048,0.035,0.011,0.024,0.022,-0.009,0.057,-0.024,
-                    -0.012,-0.018,-0.058,-0.082,0.065,0.038,0.042,0.018,0.025,0.031,0.044,0.019,
-                    0.008,-0.021,-0.048,0.092]
+        if rot_perf.get('equity_curve'):
+            eq_r = pd.DataFrame(rot_perf['equity_curve'])
+            fig_r = go.Figure(go.Scatter(x=eq_r['date'], y=eq_r['equity'], fill='tozeroy', line=dict(color='#fbbf24', width=2), name='ROT 실제'))
+            fig_r.update_layout(template='plotly_dark', height=250, margin=dict(t=20,b=20,l=20,r=20), paper_bgcolor='#0a0f1e', plot_bgcolor='#0a0f1e')
+            st.plotly_chart(fig_r, use_container_width=True, key="rot_real_final")
 
-        initial_cap = 750
-        strat_cap, spy_cap = initial_cap, initial_cap
-        spy_p, last_ex_p = initial_cap, initial_cap # 가격 추적용
-        
-        strat_hist, spy_hist = [initial_cap], [initial_cap]
-        in_mkt, drops = True, 0
+        st.divider()
+
+        # ======================================================
+        # 2. 백테스트 시뮬레이션 (2020~2026, Base 100 적용)
+        # ======================================================
+        st.subheader("📊 백테스트 시뮬레이션 (2020-2026, Base 100)")
+
+        bt_sp500 = [
+            -0.082,-0.125, 0.128, 0.127, 0.045, 0.019, 0.057, 0.070,-0.036,-0.028, 0.107, 0.038, # 2020
+            -0.011, 0.028, 0.044, 0.053, 0.005, 0.023, 0.024, 0.029,-0.047, 0.069,-0.008, 0.045, # 2021
+            -0.053,-0.030, 0.035,-0.087,-0.006,-0.082, 0.092,-0.041,-0.094, 0.079, 0.054,-0.058, # 2022
+            0.062,-0.025, 0.035, 0.015,-0.001, 0.065, 0.031,-0.017,-0.048,-0.022, 0.087, 0.044, # 2023
+            0.016, 0.052, 0.031,-0.041, 0.048, 0.035, 0.011, 0.024, 0.022,-0.009, 0.057,-0.024, # 2024
+            -0.012,-0.018,-0.058,-0.082, 0.065, 0.038, 0.042, 0.018, 0.025, 0.031, 0.044, 0.019, 0.008,-0.021,-0.048, 0.092 # 2025-26
+        ]
+
+        # [민환님 Snippet 로직 적용]
+        st_hist, bh_hist = [100.0], [100.0]
+        in_m, c_d, cap_st, cap_bh, spy_p, last_ex_p = True, 0, 100.0, 100.0, 100.0, 100.0
 
         for r in bt_sp500:
-            spy_p *= (1 + r)      # SPY 지수 가격 업데이트
-            spy_cap *= (1 + r)    # B&H 누적 수익
-            spy_hist.append(spy_cap)
+            spy_p *= (1 + r)
+            cap_bh *= (1 + r)
+            bh_hist.append(cap_bh)
             
-            if in_mkt:
-                # UPRO 3배 레버리지 (수수료 0.1% 차감)
-                strat_cap *= (1 + (r * 3 - 0.001))
-                drops = drops + 1 if r < 0 else 0
-                if drops >= 2:
-                    in_mkt = False
-                    last_ex_p = spy_p  # 탈출 시점의 '가격'을 기억
+            if in_m:
+                if r < 0: c_d += 1
+                else: c_d = 0
+                
+                if c_d >= 2:
+                    in_m, last_ex_p, ret_st = False, spy_p, 0
+                else:
+                    ret_st = r * 3 - 0.001 # 3배 레버리지 및 수수료
             else:
-                # [핵심 로직] 탈출 시점 가격 대비 누적 수익률이 +2% 이상일 때만 재진입
                 rebound = (spy_p - last_ex_p) / last_ex_p if last_ex_p > 0 else 0
                 if rebound >= 0.02:
-                    in_mkt, drops = True, 0
+                    in_m, c_d, ret_st = True, 0, r * 3 - 0.001
+                else:
+                    ret_st = 0
             
-            strat_hist.append(strat_cap)
+            cap_st *= (1 + ret_st)
+            st_hist.append(cap_st)
 
-        # 날짜 및 차트 생성 (freq='ME' 적용)
-        chart_dates = pd.date_range(start='2022-01-01', periods=len(bt_sp500), freq='ME')
-        full_dates = chart_dates.insert(0, chart_dates[0] - pd.DateOffset(months=1))
+        # 날짜축 생성 (2020-01-01 시작)
+        chart_dates = pd.date_range(start='2020-01-01', periods=len(bt_sp500), freq='ME')
+        dates_formatted = [d.strftime('%y-%m') for d in chart_dates]
+        x_axis = ['20-01'] + dates_formatted
 
-        # 백테스트 곡선 차트 (key 중복 방지)
-        fig_bt = go.Figure()
-        fig_bt.add_trace(go.Scatter(x=full_dates, y=strat_hist, name="Strategy (3x)", line=dict(color='#58a6ff', width=3)))
-        fig_bt.add_trace(go.Scatter(x=full_dates, y=spy_hist, name="SPY B&H", line=dict(color='grey', dash='dot', width=2)))
-        fig_bt.update_layout(template='plotly_dark', height=350, yaxis_title="자산 ($)", margin=dict(t=20,b=20,l=20,r=20), legend=dict(orientation="h", y=1.05, x=1))
-        st.plotly_chart(fig_bt, use_container_width=True, key="bt_logic_fixed_chart")
+        # 바 차트 (SPY 월별 수익률)
+        fig_bar = go.Figure(go.Bar(x=dates_formatted, y=bt_sp500, marker_color=['#3fb950' if x > 0 else '#f85149' for x in bt_sp500]))
+        fig_bar.update_layout(template='plotly_dark', height=200, margin=dict(t=20,b=20,l=20,r=20), yaxis=dict(tickformat=".1%"))
+        st.plotly_chart(fig_bar, use_container_width=True, key="bt_bar_v4")
+
+        # 수익률 곡선 비교 (Base 100)
+        fig_curve = go.Figure()
+        fig_curve.add_trace(go.Scatter(x=x_axis, y=st_hist, name='Strategy', line=dict(color='#3fb950', width=3)))
+        fig_curve.add_trace(go.Scatter(x=x_axis, y=bh_hist, name='SPY B&H', line=dict(color='gray', dash='dash', width=2)))
+        fig_curve.update_layout(
+            template='plotly_dark', 
+            height=350, 
+            yaxis_title="Equity (Base 100)",
+            margin=dict(t=20, b=20, l=20, r=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_curve, use_container_width=True, key="bt_curve_v4")
 
 
     with tab3:
