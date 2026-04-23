@@ -1,7 +1,7 @@
 """
-Unified Trading Bot v1.4.1 (Hotfix)
-[Fix] SyntaxError: invalid syntax (Line 281/286) -> Separated semicolon statements
-[Base] v1.4.0 Golden Recipe (UPRO 50:50, 1m/3m/6m 40:40:20, Fast Dashboard)
+Unified Trading Bot v1.4.2
+[Update] Dashboard: Added SPY Benchmark (Buy & Hold) overlay to performance charts.
+[Base] v1.4.1 Hotfix (Syntax Error Fixed, Golden Recipe 50:50, Fast Cache)
 """
 
 import os
@@ -179,7 +179,6 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
         def calc_mom(s):
             if len(s) < 126: return -999.0
             m1, m3, m6 = (s.iloc[-1]/s.iloc[-21]-1)*100, (s.iloc[-1]/s.iloc[-63]-1)*100, (s.iloc[-1]/s.iloc[-126]-1)*100
-            # [황금 레시피 유지] 1개월 40%, 3개월 40%, 6개월 20%
             return round(m1*0.4 + m3*0.4 + m6*0.2, 2)
         scores = {t: calc_mom(series) for t, series in close_all.items()}
         eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget}
@@ -252,7 +251,7 @@ def get_cached_portfolio_equity():
     return total_equity, bal, upro_qty, upro_value, rot_value
 
 # ==============================================================
-# 9. 자동매매 (Syntax 에러 완벽 수정)
+# 9. 자동매매 (1.4.1 로직 완벽 유지)
 # ==============================================================
 async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
@@ -271,19 +270,17 @@ async def run_trading():
 
     if current_hour == 20:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.4.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.4.2 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
             qty = int((upro_gap * 0.95) / cur_p_upro)
             if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
-                # [오류 수정] 세미콜론 분리
                 msgs.append(f"✅ UPRO 매수: {qty}주")
                 with open(STATE_FILE, 'w') as f:
                     json.dump({"in_market": True, "last_exit_price": 0}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         elif u_sig == "EXIT" and upro_qty > 0:
             if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
-                # [오류 수정] 세미콜론 분리
                 msgs.append(f"✅ UPRO 매도: {upro_qty}주")
                 with open(STATE_FILE, 'w') as f:
                     json.dump({"in_market": False, "last_exit_price": u_p}, f)
@@ -317,13 +314,13 @@ async def run_trading():
         if not spy_int.empty and (float(spy_int['Close'].iloc[-1])/float(spy_int['Open'].iloc[0]))-1 <= -0.03:
             q_u = trader.get_holdings(TRADE_TICKER)
             if q_u > 0 and trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
-                pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
             if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
                     q_h = trader.get_holdings(h['ticker'])
                     if q_h > 0 and trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
                         cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
-                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                        pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                 rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
             await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
 
@@ -335,10 +332,34 @@ async def run_trading():
         await tg_send(bot, chat_id, f"🧪 <b>수동 테스트</b>\nUPRO: {u_sig} | ROT: {r_sig['action']}\nTOP2: {', '.join(r_sig['top2'])}")
 
 # ==============================================================
-# 10. Dashboard
+# 10. Dashboard (SPY 비교선 시각화 로직 추가!)
 # ==============================================================
+def plot_perf_chart(perf_data, name, color, spy_series):
+    """실제 성과와 SPY(존버)를 겹쳐서 그리는 헬퍼 함수"""
+    fig = go.Figure()
+    if not perf_data['equity_curve']: return fig
+    
+    # 봇의 실제 자산 곡선
+    dates = [e['date'] for e in perf_data['equity_curve']]
+    eqs = [e['equity'] for e in perf_data['equity_curve']]
+    fig.add_trace(go.Scatter(x=dates, y=eqs, fill='tozeroy', name=f'{name} 실제', line=dict(color=color)))
+    
+    # SPY 벤치마크 (최초 거래일 기준 100으로 정규화)
+    try:
+        start_dt = pd.to_datetime(dates[0])
+        spy_series.index = spy_series.index.tz_localize(None) # 시간대 차이 방지
+        spy_sub = spy_series[spy_series.index >= start_dt]
+        if not spy_sub.empty:
+            spy_norm = (spy_sub / spy_sub.iloc[0]) * 100
+            fig.add_trace(go.Scatter(x=spy_sub.index, y=spy_norm.values, name='SPY (존버)', line=dict(color='gray', dash='dot')))
+    except Exception as e:
+        pass # SPY 데이터를 못 불러와도 차트는 정상 출력되도록 예외 처리
+        
+    fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), template="plotly_dark", height=250)
+    return fig
+
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.1", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.2", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
@@ -376,11 +397,16 @@ def run_dashboard():
         st.subheader("🚀 UPRO 상세 성과"); k1, k2, k3, k4 = st.columns(4)
         k1.metric("수익률", f"{upro_perf['total_return']:+.1f}%"); k2.metric("MDD", f"-{upro_perf['mdd']:.1f}%")
         k3.metric("승률", f"{upro_perf['win_rate']}%"); k4.metric("샤프지수", upro_perf['sharpe'])
-        if upro_perf['equity_curve']: st.plotly_chart(go.Figure(go.Scatter(x=[e['date'] for e in upro_perf['equity_curve']], y=[e['equity'] for e in upro_perf['equity_curve']], fill='tozeroy', name='UPRO 실제')), use_container_width=True)
+        # [수정] 헬퍼 함수 적용으로 SPY 비교선 출력
+        if upro_perf['equity_curve']: 
+            st.plotly_chart(plot_perf_chart(upro_perf, 'UPRO', '#58a6ff', spy_ohlc['Close']), use_container_width=True)
+            
         st.divider(); st.subheader("🔄 ROT 상세 성과"); r1, r2, r3, r4 = st.columns(4)
         r1.metric("수익률", f"{rot_perf['total_return']:+.1f}%"); r2.metric("MDD", f"-{rot_perf['mdd']:.1f}%")
         r3.metric("승률", f"{rot_perf['win_rate']}%"); r4.metric("거래횟수", rot_perf['total_trades'])
-        if rot_perf['equity_curve']: st.plotly_chart(go.Figure(go.Scatter(x=[e['date'] for e in rot_perf['equity_curve']], y=[e['equity'] for e in rot_perf['equity_curve']], fill='tozeroy', name='ROT 실제', line=dict(color='#fbbf24'))), use_container_width=True)
+        # [수정] 헬퍼 함수 적용으로 SPY 비교선 출력
+        if rot_perf['equity_curve']: 
+            st.plotly_chart(plot_perf_chart(rot_perf, 'ROT', '#fbbf24', spy_ohlc['Close']), use_container_width=True)
 
     with tab3: st.subheader("거래 이력"); st.dataframe(df_upro.tail(10)); st.dataframe(df_rot.tail(10))
 
