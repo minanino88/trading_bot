@@ -1,0 +1,13 @@
+name: Cron Test  # 스케줄러 검증용 더미
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # 5분마다 무조건 실행하도록 셋팅
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Time
+        run: echo "✅ 깃허브 스케줄러 정상 작동 중! 현재 UTC 시간은 $(date)"
