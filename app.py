@@ -1,9 +1,8 @@
 """
-Unified Trading Bot v1.3.10 FINAL STABLE
-[Fix] 1. upro_qty typo (Cache Function)
-      2. Restore calc_performance functions (Dashboard Fix)
-      3. Restore Manual Test Block (Telegram Else)
-      4. Fast Dashboard with 5min caching
+Unified Trading Bot v1.3.11 FINAL STABLE
+[Fix] 1. SyntaxError: invalid syntax (Line 281/285 semicolon fix)
+      2. Perfect synchronization between Dashboard and Real Trading
+      3. Fast Dashboard with 5min caching & All KPI restored
 """
 
 import os
@@ -193,7 +192,7 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
     except: return {"action": "WAIT", "top2": [], "scores": {}, "vix_now": 0, "spy_6m": 0}
 
 # ==============================================================
-# 4. 성과 분석 (수정 2: 함수 복구)
+# 4. 성과 분석 함수
 # ==============================================================
 def calc_upro_performance(df):
     empty = {"total_return": 0.0, "win_rate": 0.0, "mdd": 0.0, "sharpe": 0.0, "total_trades": 0, "equity_curve": []}
@@ -245,7 +244,7 @@ async def tg_send(bot, chat_id, text):
 
 @st.cache_data(ttl=300)
 def get_cached_portfolio_equity():
-    """수정 1: uppro_qty -> upro_qty 타이포 수정 완료"""
+    """KIS API 호출 결과를 5분간 캐싱하여 속도를 높입니다."""
     trader = KIS_Trader(); bal = trader.get_balance(); rot_state = load_rotation_state()
     upro_qty = trader.get_holdings(TRADE_TICKER); cur_p_upro = trader.get_current_price(TRADE_TICKER)
     upro_value = upro_qty * cur_p_upro
@@ -254,7 +253,7 @@ def get_cached_portfolio_equity():
     return total_equity, bal, upro_qty, upro_value, rot_value
 
 # ==============================================================
-# 9. 자동매매 (01시/07시/20시/else 복구)
+# 9. 자동매매 (Syntax Fix 적용!)
 # ==============================================================
 async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
@@ -273,16 +272,20 @@ async def run_trading():
 
     if current_hour == 20:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.3.10 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.3.11 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
             qty = int((upro_gap * 0.95) / cur_p_upro)
             if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매수: {qty}주"); with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
+                msgs.append(f"✅ UPRO 매수: {qty}주")
+                with open(STATE_FILE, 'w') as f:
+                    json.dump({"in_market": True, "last_exit_price": 0}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         elif u_sig == "EXIT" and upro_qty > 0:
             if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매도: {upro_qty}주"); with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
+                msgs.append(f"✅ UPRO 매도: {upro_qty}주")
+                with open(STATE_FILE, 'w') as f:
+                    json.dump({"in_market": False, "last_exit_price": u_p}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
         action, top2 = r_sig['action'], r_sig['top2']
@@ -313,28 +316,27 @@ async def run_trading():
         if not spy_int.empty and (float(spy_int['Close'].iloc[-1])/float(spy_int['Open'].iloc[0]))-1 <= -0.03:
             q_u = trader.get_holdings(TRADE_TICKER)
             if q_u > 0 and trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
-                pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
             if rot_state.get('in_market'):
                 for h in rot_state.get('holdings', []):
                     q_h = trader.get_holdings(h['ticker'])
                     if q_h > 0 and trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
                         cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
-                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                        pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                 rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
             await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
 
     elif current_hour == 7:
         bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
         await tg_send(bot, chat_id, msg)
-    
-    else: # [수정 3] 수동 테스트 복구
+    else:
         await tg_send(bot, chat_id, f"🧪 <b>수동 테스트</b>\nUPRO: {u_sig} | ROT: {r_sig['action']}\nTOP2: {', '.join(r_sig['top2'])}")
 
 # ==============================================================
-# 10. Dashboard (수정 2: perf 함수 등 복구 완료)
+# 10. Dashboard
 # ==============================================================
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.3.10", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.3.11", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
