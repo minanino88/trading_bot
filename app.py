@@ -1,8 +1,7 @@
 """
-Unified Trading Bot v1.4.0 (Golden Recipe)
-[Update] 1. Asset Allocation: UPRO 50% / ROT 50%
-         2. Momentum Weights: 1m(40%), 3m(40%), 6m(20%)
-[Base] v1.3.11 Stable (Fast Dashboard, Auto TOP30, Risk Mgmt)
+Unified Trading Bot v1.4.1 (Hotfix)
+[Fix] SyntaxError: invalid syntax (Line 281/286) -> Separated semicolon statements
+[Base] v1.4.0 Golden Recipe (UPRO 50:50, 1m/3m/6m 40:40:20, Fast Dashboard)
 """
 
 import os
@@ -28,7 +27,7 @@ except ImportError:
 warnings.filterwarnings('ignore')
 
 # ==============================================================
-# 1. 설정 (황금 레시피 적용: 50대 50)
+# 1. 설정 (황금 레시피 유지: 50대 50)
 # ==============================================================
 KST = pytz.timezone('Asia/Seoul')
 UPRO_RATIO     = 0.50
@@ -180,7 +179,7 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
         def calc_mom(s):
             if len(s) < 126: return -999.0
             m1, m3, m6 = (s.iloc[-1]/s.iloc[-21]-1)*100, (s.iloc[-1]/s.iloc[-63]-1)*100, (s.iloc[-1]/s.iloc[-126]-1)*100
-            # [황금 레시피 적용] 1개월 40%, 3개월 40%, 6개월 20%로 단기/중기 민감도 극대화
+            # [황금 레시피 유지] 1개월 40%, 3개월 40%, 6개월 20%
             return round(m1*0.4 + m3*0.4 + m6*0.2, 2)
         scores = {t: calc_mom(series) for t, series in close_all.items()}
         eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget}
@@ -253,7 +252,7 @@ def get_cached_portfolio_equity():
     return total_equity, bal, upro_qty, upro_value, rot_value
 
 # ==============================================================
-# 9. 자동매매
+# 9. 자동매매 (Syntax 에러 완벽 수정)
 # ==============================================================
 async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
@@ -272,16 +271,22 @@ async def run_trading():
 
     if current_hour == 20:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.4.0 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.4.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
             qty = int((upro_gap * 0.95) / cur_p_upro)
             if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매수: {qty}주"); with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
+                # [오류 수정] 세미콜론 분리
+                msgs.append(f"✅ UPRO 매수: {qty}주")
+                with open(STATE_FILE, 'w') as f:
+                    json.dump({"in_market": True, "last_exit_price": 0}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         elif u_sig == "EXIT" and upro_qty > 0:
             if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매도: {upro_qty}주"); with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
+                # [오류 수정] 세미콜론 분리
+                msgs.append(f"✅ UPRO 매도: {upro_qty}주")
+                with open(STATE_FILE, 'w') as f:
+                    json.dump({"in_market": False, "last_exit_price": u_p}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
         action, top2 = r_sig['action'], r_sig['top2']
@@ -333,7 +338,7 @@ async def run_trading():
 # 10. Dashboard
 # ==============================================================
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.0", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.1", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
