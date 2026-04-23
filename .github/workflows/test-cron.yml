@@ -2,7 +2,7 @@ name: Cron Test  # 스케줄러 검증용 더미
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5분마다 무조건 실행하도록 셋팅
+    - cron: ''  # 5분마다 무조건 실행하도록 셋팅
   workflow_dispatch:
 
 jobs:
