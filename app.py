@@ -117,25 +117,39 @@ class KIS_Trader:
             return 0
 
 
-    def get_current_price(self, ticker):
+        def get_current_price(self, ticker):
+        # 1차: 야후 파이낸스 (가장 확실한 5일치 일봉 데이터에서 마지막 종가 추출)
         try:
-            # 1차: 한투 API (UPRO/SPY는 AMS, 나머지는 NAS로 찌름)
+            import yfinance as yf
+            df = yf.download(ticker, period='5d', progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            
+            # 결측치(NaN) 다 버리고 가장 마지막에 있는 종가 추출
+            price = float(df['Close'].dropna().iloc[-1])
+            if price > 0:
+                return price
+        except Exception as e:
+            # 실패하면 깃허브 Actions 로그에 정확한 파이썬 에러 메시지를 남김
+            print(f"🚨 [가격로그] yfinance 에러 ({ticker}): {e}")
+
+        # 2차: 한투 API (야후 실패 시 예비용)
+        try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
             excd = "AMS" if ticker in ["UPRO", "SPY"] else "NAS"
             params = {"AUTH": "", "EXCD": excd, "SYMB": ticker}
             res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
-            price = float(res.get('output', {}).get('last', 0))
             
-            # 2차: 한투가 0원을 주면 야후 파이낸스로 우회 (절대 에러 안 나는 fast_info 사용)
-            if price == 0:
-                import yfinance as yf
-                price = float(yf.Ticker(ticker).fast_info['lastPrice'])
-                print(f"💲 {ticker} 야후파이낸스 현재가 우회 성공: {price}")
-                
-            return price
+            price = float(res.get('output', {}).get('last', 0))
+            if price > 0:
+                return price
+            else:
+                # KIS가 0원을 줬다면 그 원본 응답 데이터를 로그에 찍음
+                print(f"🚨 [가격로그] KIS 0원 응답 ({ticker}): {res}")
         except Exception as e:
-            print(f"🚨 {ticker} 현재가 조회 에러: {e}")
-            return 0.0
+            print(f"🚨 [가격로그] KIS 에러 ({ticker}): {e}")
+
+        return 0.0
 
 
 
@@ -298,8 +312,8 @@ def ask_gemini(u_sig, r_sig):
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
     
-    # ✅ 클로드 제안대로 다시 최신 2.0 모델로 복귀
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    # 429 에러가 나는 2.0 대신, 가장 안정적인 최신 1.5 모델 주소로 변경
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
     
@@ -307,8 +321,10 @@ def ask_gemini(u_sig, r_sig):
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        elif res.status_code == 429:
+            return "AI 무료 사용량 초과 (429)"
         else:
-            return f"AI 지연 ({res.status_code})"
+            return f"AI 연결 지연 ({res.status_code})"
     except: 
         return "AI 연결 실패"
 
