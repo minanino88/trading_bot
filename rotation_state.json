@@ -2,14 +2,14 @@
   "in_market": true,
   "holdings": [
     {
-      "ticker": "ARM",
-      "qty": 2,
-      "entry_price": 234.9949951171875
+      "ticker": "INTC",
+      "qty": 7,
+      "entry_price": 80.48989868164062
     },
     {
-      "ticker": "AMD",
+      "ticker": "WDC",
       "qty": 1,
-      "entry_price": 348.3699951171875
+      "entry_price": 403.82501220703125
     }
   ],
   "entry_date": null
