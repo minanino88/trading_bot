@@ -281,8 +281,8 @@ def ask_gemini(u_sig, r_sig):
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
     
-    # ✅ 404 에러가 나지 않는 가장 기본적이고 범용적인 모델(gemini-pro)로 고정
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+    # ✅ 가장 범용적인 1.5-flash 모델로 고정
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
     
@@ -291,10 +291,8 @@ def ask_gemini(u_sig, r_sig):
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            print(f"Gemini API Error ({res.status_code}): {res.text}")
-            return f"AI 거절 ({res.status_code})"
-    except Exception as e: 
-        print(f"Gemini API Error: {e}")
+            return f"AI 거절 (코드: {res.status_code})"
+    except: 
         return "AI 연결 실패"
 
 
