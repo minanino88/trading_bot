@@ -122,8 +122,13 @@ class KIS_Trader:
 # ==============================================================
 def get_top_30_tickers():
     try:
+        import io
         url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        tables = pd.read_html(url)
+        # 봇이 아닌 일반 크롬 브라우저처럼 위장
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        res = requests.get(url, headers=headers)
+        
+        tables = pd.read_html(io.StringIO(res.text))
         for table in tables:
             if 'Ticker' in table.columns:
                 return [t.replace('.', '-') for t in table['Ticker'].head(30).tolist()]
@@ -133,6 +138,7 @@ def get_top_30_tickers():
     except Exception as e: 
         print(f"Wiki Parsing Error: {e}")
         return FALLBACK_POOL
+
 
 def get_market_data():
     try:
