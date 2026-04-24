@@ -67,7 +67,7 @@ class KIS_Trader:
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
-        def get_balance(self):
+    def get_balance(self):
         try:
             import json
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
