@@ -356,7 +356,7 @@ async def run_trading():
                     cp = trader.get_current_price(h['ticker']); ret = (cp - h.get('entry_price', cp)) / max(h.get('entry_price', cp), 1) * 100
                     pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
             rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state); msgs.append("🚨 ROT 하락장 청산")
-        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(bot, chat_id, "\n".join(msgs))
+        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "\n".join(msgs))
 
     elif current_hour in [1,2]:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
@@ -375,15 +375,15 @@ async def run_trading():
                             cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
                             pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                     rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
-                await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
+                await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
 
     
     elif current_hour in [7,8]:
         bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
-        await tg_send(bot, chat_id, msg)
+        await tg_send(token_v, chat_id, msg)
     
     else:
-        await tg_send(bot, chat_id, f"🧪 <b>수동 테스트</b>\nUPRO: {u_sig} | ROT: {r_sig['action']}\nTOP2: {', '.join(r_sig['top2'])}")
+        await tg_send(token_v, chat_id, f"🧪 <b>수동 테스트</b>\nUPRO: {u_sig} | ROT: {r_sig['action']}\nTOP2: {', '.join(r_sig['top2'])}")
 
 # ==============================================================
 # 10. Dashboard (SPY 비교선 시각화 로직 추가!)
