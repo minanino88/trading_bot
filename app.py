@@ -258,9 +258,31 @@ def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
+    
+    # 1차 시도: 최신 2.0 플래시 모델
+    url_2_0 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    # 2차 시도: 안정적인 1.5 플래시 모델 (대비책)
+    url_1_5 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {'Content-Type': 'application/json'}
+    
     try:
-        res = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}", headers={'Content-Type': 'application/json'}, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
-        return res.json()['candidates'][0]['content']['parts'][0]['text'].strip() if res.status_code == 200 else "AI 분석 불가"
+        # 1. 먼저 2.0 모델로 찔러봄
+        res = requests.post(url_2_0, headers=headers, json=payload, timeout=10)
+        
+        # 2. 만약 2.0 모델이 거절(404 등)하면 1.5 모델로 다시 시도
+        if res.status_code != 200:
+            print(f"⚠️ Gemini 2.0 실패 ({res.status_code}). 1.5 모델로 재시도합니다. 사유: {res.text}")
+            res = requests.post(url_1_5, headers=headers, json=payload, timeout=10)
+            
+        # 3. 최종 결과 반환
+        if res.status_code == 200:
+            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        else:
+            print(f"❌ Gemini 최종 실패 ({res.status_code}): {res.text}")
+            return f"AI 거절 ({res.status_code})"
+            
     except Exception as e: 
         print(f"Gemini API Error: {e}")
         return "AI 연결 실패"
