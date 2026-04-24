@@ -86,27 +86,27 @@ class KIS_Trader:
         except: return 0
 
     def get_current_price(self, ticker):
-    try:
-        # 해외주식 현재가 체결가 조회 (TR_ID: HHDFS76410100)
-        url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
-        # 종목코드 앞에 시장 구분(나스닥 NASD, 아멕스 AMEX 등)을 붙여야 할 수도 있음
-        # 단순 조회를 위해 기본 포맷 사용
-        params = {
-            "AUTH": "",
-            "EXCD": "NAS" if ticker not in ["UPRO", "SPY"] else "AMS",
-            "SYMB": ticker
-        }
-        res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
-        price = float(res.get('output', {}).get('last', 0))
-        
-        # 만약 한투 API가 일시적으로 실패할 경우를 대비한 2중 방어 (yfinance)
-        if price == 0:
-            df = yf.download(ticker, period='1d', interval='1m', progress=False)
-            price = float(df['Close'].iloc[-1])
+        try:
+            # 해외주식 현재가 체결가 조회 (TR_ID: HHDFS76410100)
+            url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
+            # 종목코드 앞에 시장 구분(나스닥 NASD, 아멕스 AMEX 등)을 붙여야 할 수도 있음
+            # 단순 조회를 위해 기본 포맷 사용
+            params = {
+                "AUTH": "",
+                "EXCD": "NAS" if ticker not in ["UPRO", "SPY"] else "AMS",
+                "SYMB": ticker
+            }
+            res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
+            price = float(res.get('output', {}).get('last', 0))
             
-        return price
-    except:
-        return 0.0
+            # 만약 한투 API가 일시적으로 실패할 경우를 대비한 2중 방어 (yfinance)
+            if price == 0:
+                df = yf.download(ticker, period='1d', interval='1m', progress=False)
+                price = float(df['Close'].iloc[-1])
+                
+            return price
+        except:
+            return 0.0
 
 
     def send_order(self, ticker, qty, side="BUY"):
@@ -305,7 +305,7 @@ async def run_trading():
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
 
     if spy_ohlc.empty:
-        if bot: await tg_send(bot, chat_id, f"⚠️ 데이터 로드 실패: {d_msg}")
+        if bot: await tg_send(token_v, chat_id, f"⚠️ 데이터 로드 실패: {d_msg}")
         return
     rot_state = load_rotation_state()
     bal = trader.get_balance(); upro_qty = trader.get_holdings(TRADE_TICKER); cur_p_upro = trader.get_current_price(TRADE_TICKER)
