@@ -110,27 +110,44 @@ def get_top_30_tickers():
     try:
         url = "https://en.wikipedia.org/wiki/Nasdaq-100"
         tables = pd.read_html(url)
-        try: table = tables[4]
-        except:
-            try: table = tables[3]
-            except: return FALLBACK_POOL
-        tickers = table['Ticker'].head(30).tolist()
-        return [t.replace('.', '-') for t in tickers]
-    except: return FALLBACK_POOL
+        # 테이블 인덱스에 의존하지 않고 컬럼명을 직접 스캔 (클로드 지적 반영)
+        for table in tables:
+            if 'Ticker' in table.columns:
+                return [t.replace('.', '-') for t in table['Ticker'].head(30).tolist()]
+            elif 'Symbol' in table.columns:
+                return [t.replace('.', '-') for t in table['Symbol'].head(30).tolist()]
+        return FALLBACK_POOL
+    except Exception as e: 
+        print(f"Wiki Parsing Error: {e}")
+        return FALLBACK_POOL
 
 def get_market_data():
     try:
         tickers = get_top_30_tickers()
-        all_data = yf.download(tickers + [SIGNAL_TICKER, '^VIX'], period='2y', progress=False, auto_adjust=True)
-        spy_ohlc = all_data.loc[:, pd.IndexSlice[:, SIGNAL_TICKER]].droplevel(1, axis=1)
-        close_prices = all_data['Close']
-        spy_close = close_prices[SIGNAL_TICKER].copy()
-        vix_close = close_prices['^VIX'].copy()
-        spy_df = pd.DataFrame(spy_close); spy_df.columns = ['Close']
+        
+        spy_ohlc = yf.download(SIGNAL_TICKER, period='2y', progress=False)
+        vix_data = yf.download('^VIX', period='2y', progress=False)
+        close_prices = yf.download(tickers, period='2y', progress=False)
+
+        if isinstance(spy_ohlc.columns, pd.MultiIndex): spy_ohlc.columns = spy_ohlc.columns.get_level_values(0)
+        if isinstance(vix_data.columns, pd.MultiIndex): vix_data.columns = vix_data.columns.get_level_values(0)
+
+        # ✅ 버그 1 (치명적) 수정: yfinance 티커 1개/여러 개 분기 처리
+        if isinstance(close_prices.columns, pd.MultiIndex):
+            close_df = close_prices['Close']
+        else:
+            # 티커가 1개일 경우 (Fallback 풀 등) MultiIndex가 아니므로 변환
+            close_df = pd.DataFrame({tickers[0]: close_prices['Close']}) if len(tickers) == 1 else close_prices
+
+        vix_close = vix_data['Close']
+        spy_df = pd.DataFrame(spy_ohlc['Close'].copy()); spy_df.columns = ['Close']
         monthly = spy_df['Close'].resample('ME').last().pct_change().dropna()
-        close_all = {t: close_prices[t].dropna() for t in tickers if t in close_prices}
+        
+        close_all = {t: close_df[t].dropna() for t in tickers if t in close_df.columns}
+        
         return spy_ohlc, monthly, vix_close, close_all, "Success"
-    except Exception as e: return pd.DataFrame(), pd.Series(), pd.Series(), {}, str(e)
+    except Exception as e: 
+        return pd.DataFrame(), pd.Series(), pd.Series(), {}, f"Data Error: {str(e)}"
 
 def load_rotation_state():
     default = {"in_market": False, "holdings": [], "entry_date": None}
@@ -236,10 +253,18 @@ def ask_gemini(u_sig, r_sig):
 
 async def tg_send(bot, chat_id, text):
     if not bot or not chat_id: return False
-    try: await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML"); return True
-    except: 
-        try: await bot.send_message(chat_id=chat_id, text=text); return True
-        except: return False
+    try: 
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        return True
+    except Exception as e: 
+        print(f"Telegram HTML Error: {e}") # Actions 로그용
+        try: 
+            await bot.send_message(chat_id=chat_id, text=text)
+            return True
+        except Exception as e2: 
+            print(f"Telegram Plain Error: {e2}")
+            return False
+
 
 @st.cache_data(ttl=300)
 def get_cached_portfolio_equity():
@@ -347,24 +372,26 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     fig = go.Figure()
     if not perf_data['equity_curve']: return fig
     
-    # 봇의 실제 자산 곡선
     dates = [e['date'] for e in perf_data['equity_curve']]
     eqs = [e['equity'] for e in perf_data['equity_curve']]
     fig.add_trace(go.Scatter(x=dates, y=eqs, fill='tozeroy', name=f'{name} 실제', line=dict(color=color)))
     
-    # SPY 벤치마크 (최초 거래일 기준 100으로 정규화)
     try:
         start_dt = pd.to_datetime(dates[0])
-        spy_series.index = spy_series.index.tz_localize(None) # 시간대 차이 방지
+        # ✅ 버그 3 수정: Timezone 정보가 있을 때만 localize 해제
+        if spy_series.index.tz is not None:
+            spy_series.index = spy_series.index.tz_localize(None) 
+            
         spy_sub = spy_series[spy_series.index >= start_dt]
         if not spy_sub.empty:
             spy_norm = (spy_sub / spy_sub.iloc[0]) * 100
             fig.add_trace(go.Scatter(x=spy_sub.index, y=spy_norm.values, name='SPY (존버)', line=dict(color='gray', dash='dot')))
     except Exception as e:
-        pass # SPY 데이터를 못 불러와도 차트는 정상 출력되도록 예외 처리
+        pass 
         
     fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), template="plotly_dark", height=250)
     return fig
+
 
 def run_dashboard():
     now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.2", layout="wide")
