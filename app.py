@@ -258,7 +258,8 @@ def get_market_data():
         else: close_df = close_prices[['Close']].rename(columns={'Close': tickers[0]}) if len(tickers) == 1 else close_prices['Close']
 
         vix_close = vix_data['Close']
-        spy_close_series = spy_ohlc['Close'].squeeze()
+        spy_close_col = spy_ohlc['Close']
+        spy_close_series = spy_close_col.iloc[:, 0] if isinstance(spy_close_col, pd.DataFrame) else spy_close_col
         monthly = spy_close_series.resample('ME').last().pct_change().dropna()
         close_all = {t: close_df[t].dropna() for t in tickers if t in close_df.columns}
         
