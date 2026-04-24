@@ -1,0 +1,16 @@
+{
+  "in_market": true,
+  "holdings": [
+    {
+      "ticker": "ARM",
+      "qty": 2,
+      "entry_price": 234.9949951171875
+    },
+    {
+      "ticker": "AMD",
+      "qty": 1,
+      "entry_price": 348.3699951171875
+    }
+  ],
+  "entry_date": null
+}
