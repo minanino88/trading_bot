@@ -262,7 +262,7 @@ def ask_gemini(u_sig, r_sig):
     # 1차 시도: 최신 2.0 플래시 모델
     url_2_0 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     # 2차 시도: 안정적인 1.5 플래시 모델 (대비책)
-    url_1_5 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url_1_5 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
     
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
