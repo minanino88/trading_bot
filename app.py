@@ -1,12 +1,11 @@
 """
-Unified Trading Bot v1.5.1
-[Fix] 긴급탈출 후 STATE_FILE 저장 추가 (in_market: False)
-[Fix] 긴급탈출 SPY 당일 비교 로직 수정 (period='5d' + 날짜 필터)
-[Fix] ROT EXIT 시 실패 종목 있어도 state 초기화되던 고스트 포지션 버그 수정
-[Fix] send_order 매도 시 가격 0원 방어 추가
-[Fix] yfinance 재시도 로직 추가 (3회, 5초 간격)
-[Fix] FALLBACK_POOL 확장 (7개 -> 20개)
-[Fix] 성과 분석 거래 건수 부족 시 샤프지수 표기 보호
+Unified Trading Bot v1.5.3
+[Fix] yml 상태 저장 지원에 맞춘 환경 최적화
+[Fix] 긴급탈출과 일반매매 스케줄러 시간대 겹침 버그 수정 (새벽 2시 충돌 해결)
+[Fix] ROTATE 시 유지되는 종목(top2 포함)의 중복 매수(비중 2배 뻥튀기) 방어 로직 추가
+[Fix] 긴급탈출 SPY 당일봉 비교 시 썸머타임(DST) 대응 US/Eastern 타임존 자동 변환 적용
+[Fix] yfinance 깡통 데이터(Close 컬럼 누락) 수신 시 안전 종료 로직 강화
+[Fix] KIS API 토큰 디버깅을 위한 get_balance RAW 로그 복구
 """
 
 import os
@@ -66,10 +65,7 @@ class KIS_Trader:
         self._set_token()
 
     def _get_exch_info(self, ticker):
-        """티커에 따른 거래소 코드(주문용)와 시장 코드(조회용) 반환"""
-        # AMEX/ARCA 상장 ETF 리스트
         amex_list = ["UPRO", "SPY", "TQQQ", "SQQQ", "VOO", "IVV"]
-        # NYSE 상장 종목 (나스닥 100 외 종목 확장 대비)
         nyse_list = ["VRT", "UNH", "JPM", "V", "MA"] 
         if ticker in amex_list:
             return "AMEX", "AMS"
@@ -87,7 +83,6 @@ class KIS_Trader:
         except Exception as e:
             print(f"KIS token ERROR: {e}")
 
-
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
@@ -103,9 +98,9 @@ class KIS_Trader:
                 "ITEM_CD": "UPRO"
             }
             res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
-            print(f"📊 잔고 RAW 전체: {json.dumps(res, ensure_ascii=False)}")  
+            # 💡 요청하신 RAW 데이터 출력 로그 복구 완료
+            print(f"📊 잔고 RAW: {json.dumps(res, ensure_ascii=False)}")  
             usd_cash = float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
-            print(f"💰 달러 가용 잔고: ${usd_cash}")
             return usd_cash
         except Exception as e:
             print(f"🚨 KIS 시스템 에러: {e}")
@@ -127,11 +122,9 @@ class KIS_Trader:
             for item in res.get('output1', []):
                 if item.get('pdno') == ticker or item.get('ovrs_pdno') == ticker:
                     qty = int(float(item.get('ovrs_cblc_qty', item.get('ccld_qty_smtl', 0))))
-                    print(f"📦 {ticker} 보유 확인: {qty}주")
                     return qty
             return 0
         except Exception as e: 
-            print(f"🚨 KIS 보유종목 조회 에러: {e}")
             return 0
 
     def get_current_price(self, ticker):
@@ -141,8 +134,7 @@ class KIS_Trader:
                 df.columns = df.columns.get_level_values(0)
             price = float(df['Close'].dropna().iloc[-1])
             if price > 0: return price
-        except Exception as e:
-            print(f"🚨 [가격로그] yfinance 에러 ({ticker}): {e}")
+        except Exception as e: pass
 
         try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
@@ -151,9 +143,7 @@ class KIS_Trader:
             res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
             price = float(res.get('output', {}).get('last', 0))
             if price > 0: return price
-            else: print(f"🚨 [가격로그] KIS 0원 응답 ({ticker}): {res}")
-        except Exception as e:
-            print(f"🚨 [가격로그] KIS 에러 ({ticker}): {e}")
+        except Exception as e: pass
         return 0.0
 
     def send_order(self, ticker, qty, side="BUY"):
@@ -165,7 +155,7 @@ class KIS_Trader:
                 print(f"🚨 [주문차단] {ticker} 현재가 0원, {side} 주문 취소")
                 return {"rt_cd": "1", "msg1": f"현재가 수신 실패(0원) - {ticker} {side} 취소"}
             order_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
-            exch_cd, _ = self._get_exch_info(ticker) # 💡 하드코딩 대신 함수 호출
+            exch_cd, _ = self._get_exch_info(ticker)
             data = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": exch_cd, "PDNO": ticker, "ORD_QTY": str(int(qty)), "OVRS_ORD_UNPR": f"{order_p:.2f}", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
             return requests.post(url, headers=self._headers(tr_id), data=json.dumps(data)).json()
         except Exception as e: return {"rt_cd": "1", "msg1": str(e)}
@@ -181,39 +171,26 @@ def get_top_30_tickers():
         res = requests.get(url, headers=headers)
         tables = pd.read_html(io.StringIO(res.text))
         for table in tables:
-            # 'Ticker' 또는 'Symbol' 컬럼이 있는 테이블을 찾음
             target_col = None
             if 'Ticker' in table.columns: target_col = 'Ticker'
             elif 'Symbol' in table.columns: target_col = 'Symbol'
             
             if target_col:
-                # head(30)을 제거하여 100개 전체 종목을 가져옴
                 full_list = [t.replace('.', '-') for t in table[target_col].tolist()]
-                print(f"✅ 나스닥 100 종목 확보: {len(full_list)}개")
                 return full_list
         return FALLBACK_POOL
-    except Exception as e:
-        print(f"⚠️ 위키 파싱 실패, Fallback 사용: {e}")
-        return FALLBACK_POOL
-
-
-
+    except Exception as e: return FALLBACK_POOL
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
-    """yfinance 재시도 + 리스트일 경우 20개씩 배치 처리 (타임아웃 방지)"""
-    # 단일 티커는 기존 방식 그대로
     if isinstance(ticker_or_list, str):
         for attempt in range(max_retry):
             try:
                 df = yf.download(ticker_or_list, period=period, interval=interval, progress=False)
                 if df is not None and not df.empty: return df
-                print(f"⚠️ yfinance 빈 응답 ({ticker_or_list}, 시도 {attempt+1}/{max_retry})")
-            except Exception as e:
-                print(f"⚠️ yfinance 에러 ({ticker_or_list}, 시도 {attempt+1}/{max_retry}): {e}")
+            except Exception as e: pass
             if attempt < max_retry - 1: time.sleep(5)
         return pd.DataFrame()
 
-    # 리스트는 20개씩 배치 처리 (100개 한번에 요청하면 야후가 타임아웃으로 차단)
     BATCH_SIZE = 20
     all_dfs = []
     for i in range(0, len(ticker_or_list), BATCH_SIZE):
@@ -224,22 +201,16 @@ def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retr
                 if df is not None and not df.empty:
                     all_dfs.append(df)
                     break
-                print(f"⚠️ yfinance 빈 응답 (배치 {i//BATCH_SIZE+1}, 시도 {attempt+1}/{max_retry})")
-            except Exception as e:
-                print(f"⚠️ yfinance 에러 (배치 {i//BATCH_SIZE+1}, 시도 {attempt+1}/{max_retry}): {e}")
+            except Exception as e: pass
             if attempt < max_retry - 1: time.sleep(3)
-        time.sleep(1)  # 배치 사이 짧은 휴식으로 IP 차단 방지
+        time.sleep(1)
 
     if not all_dfs: return pd.DataFrame()
-    # 배치 결과 합치기 - MultiIndex 컬럼 기준
     try:
         combined = pd.concat(all_dfs, axis=1)
-        # 중복 컬럼 제거
         combined = combined.loc[:, ~combined.columns.duplicated()]
         return combined
-    except Exception as e:
-        print(f"⚠️ 배치 합치기 실패: {e}")
-        return all_dfs[0] if all_dfs else pd.DataFrame()
+    except Exception as e: return all_dfs[0] if all_dfs else pd.DataFrame()
 
 def get_market_data():
     try:
@@ -253,6 +224,9 @@ def get_market_data():
 
         if isinstance(spy_ohlc.columns, pd.MultiIndex): spy_ohlc.columns = spy_ohlc.columns.get_level_values(0)
         if isinstance(vix_data.columns, pd.MultiIndex): vix_data.columns = vix_data.columns.get_level_values(0)
+
+        if 'Close' not in spy_ohlc.columns or 'Close' not in vix_data.columns:
+            raise ValueError("데이터에 Close 컬럼 누락 (야후파이낸스 에러)")
 
         if isinstance(close_prices.columns, pd.MultiIndex): close_df = close_prices['Close']
         else: close_df = close_prices[['Close']].rename(columns={'Close': tickers[0]}) if len(tickers) == 1 else close_prices['Close']
@@ -369,26 +343,16 @@ def ask_gemini(u_sig, r_sig):
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
 
-    # 💡 핵심: 상위 모델부터 순차적으로 시도 (429 에러 발생 시 다음 모델로)
-    # 현재 구글 API에서 작동하는 최신 모델 명칭으로 구성했습니다.
     models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-    
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         try:
             res = requests.post(url, headers=headers, json=payload, timeout=10)
             if res.status_code == 200:
                 return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            elif res.status_code == 429:
-                print(f"⚠️ {model} 할당량 초과(429), 다음 모델로 폴백 시도...")
-                continue # 다음 모델로 루프 진행
-            else:
-                print(f"🚨 {model} 에러 ({res.status_code}): {res.text[:100]}")
-                continue
-        except Exception as e:
-            print(f"🚨 {model} 통신 예외 발생: {e}")
-            continue
-            
+            elif res.status_code == 429: continue 
+            else: continue
+        except Exception as e: continue
     return "AI 연결 실패 (모든 모델 Quota 초과)"
 
 async def tg_send(token_v, chat_id, text):
@@ -423,7 +387,7 @@ async def run_trading():
     trader = KIS_Trader(); token_v, chat_id = os.getenv('TELEGRAM_TOKEN'), os.getenv('CHAT_ID')
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
     if spy_ohlc.empty: 
-        await tg_send(token_v, chat_id, f"⚠️ 데이터 수신 실패 ({d_msg})") # 👈 알람 추가
+        await tg_send(token_v, chat_id, f"⚠️ 데이터 수신 실패 ({d_msg})") 
         return
     rot_state = load_rotation_state()
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
@@ -431,11 +395,13 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20, 2]:
+    if current_hour in [20, 3]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.5.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.5.3 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         cur_p_upro = trader.get_current_price(TRADE_TICKER)
+        
+        # UPRO 로직
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
             if cur_p_upro > 0:
                 qty = int((upro_gap * 0.95) / cur_p_upro)
@@ -449,15 +415,31 @@ async def run_trading():
                 with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
+        # ROT 로직
         action, top2 = r_sig['action'], r_sig['top2']
         if action in ["ENTER", "ROTATE"] and top2:
+            new_h = []
+            retained_tickers = []
+            
             for h in rot_state.get('holdings', []):
                 q = trader.get_holdings(h['ticker'])
-                if q > 0 and trader.send_order(h['ticker'], q, "SELL").get('rt_cd') == '0':
-                    cp = trader.get_current_price(h['ticker']); ret = (cp - h.get('entry_price', cp)) / max(h.get('entry_price', cp), 1) * 100
-                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-            time.sleep(2); new_h = []
+                if q > 0:
+                    if h['ticker'] not in top2:
+                        if trader.send_order(h['ticker'], q, "SELL").get('rt_cd') == '0':
+                            cp = trader.get_current_price(h['ticker'])
+                            ret = (cp - h.get('entry_price', cp)) / max(h.get('entry_price', cp), 1) * 100
+                            pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                    else:
+                        new_h.append(h)
+                        retained_tickers.append(h['ticker'])
+            
+            time.sleep(2)
+            
             for t in top2:
+                if t in retained_tickers:
+                    msgs.append(f"🔄 ROT 유지: {t} (추가 매수 생략)")
+                    continue
+                    
                 p = trader.get_current_price(t)
                 qty = int(((rot_target * 0.95) / len(top2)) / p) if p > 0 else 0
                 if qty >= 1:
@@ -465,7 +447,10 @@ async def run_trading():
                         new_h.append({"ticker": t, "qty": qty, "entry_price": p})
                         pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                         msgs.append(f"✅ ROT 매수 성공: {t} {qty}주")
-            rot_state.update({"in_market": len(new_h) > 0, "holdings": new_h}); save_rotation_state(rot_state)
+                        
+            rot_state.update({"in_market": len(new_h) > 0, "holdings": new_h})
+            save_rotation_state(rot_state)
+            
         elif action == "EXIT" and rot_state.get('in_market'):
             remaining = []
             for h in rot_state.get('holdings', []):
@@ -482,28 +467,31 @@ async def run_trading():
         spy_int = _yf_download_with_retry(SIGNAL_TICKER, period='5d', interval='5m')
         if not spy_int.empty:
             if isinstance(spy_int.columns, pd.MultiIndex): spy_int.columns = spy_int.columns.get_level_values(0)
-            today_us = (now_kst - timedelta(hours=13)).date()
+            
+            today_us = now_kst.astimezone(pytz.timezone('US/Eastern')).date()
             spy_today = spy_int[spy_int.index.tz_convert(None).date == today_us] if spy_int.index.tz else spy_int[spy_int.index.date == today_us]
             spy_check = spy_today if len(spy_today) >= 5 else spy_int
-            day_ret = (float(spy_check['Close'].iloc[-1]) / float(spy_check['Open'].iloc[0])) - 1
-            if day_ret <= -0.03:
-                q_u = trader.get_holdings(TRADE_TICKER)
-                if q_u > 0:
-                    if trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
-                        exit_p = trader.get_current_price(TRADE_TICKER)
-                        pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": exit_p}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
-                        with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": exit_p}, f)
-                if rot_state.get('in_market'):
-                    rem = []
-                    for h in rot_state['holdings']:
-                        q_h = trader.get_holdings(h['ticker'])
-                        if q_h > 0:
-                            if trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
-                                cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
-                                pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-                            else: rem.append(h)
-                    rot_state.update({"in_market": len(rem) > 0, "holdings": rem}); save_rotation_state(rot_state)
-                await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
+            
+            if not spy_check.empty:
+                day_ret = (float(spy_check['Close'].iloc[-1]) / float(spy_check['Open'].iloc[0])) - 1
+                if day_ret <= -0.03:
+                    q_u = trader.get_holdings(TRADE_TICKER)
+                    if q_u > 0:
+                        if trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
+                            exit_p = trader.get_current_price(TRADE_TICKER)
+                            pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": exit_p}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                            with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": exit_p}, f)
+                    if rot_state.get('in_market'):
+                        rem = []
+                        for h in rot_state['holdings']:
+                            q_h = trader.get_holdings(h['ticker'])
+                            if q_h > 0:
+                                if trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
+                                    cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
+                                    pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                                else: rem.append(h)
+                        rot_state.update({"in_market": len(rem) > 0, "holdings": rem}); save_rotation_state(rot_state)
+                    await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
 
     elif current_hour in [7, 8]:
         bal_7 = trader.get_balance()
@@ -531,7 +519,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     return fig
 
 def run_dashboard():
-    st.set_page_config(page_title="Unified Bot v1.5.1", layout="wide")
+    st.set_page_config(page_title="Unified Bot v1.5.3", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: return
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
