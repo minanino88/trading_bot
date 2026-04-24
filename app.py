@@ -279,15 +279,47 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
             if len(s) < 126: return -999.0
             m1, m3, m6 = (s.iloc[-1]/s.iloc[-21]-1)*100, (s.iloc[-1]/s.iloc[-63]-1)*100, (s.iloc[-1]/s.iloc[-126]-1)*100
             return round(m1*0.4 + m3*0.4 + m6*0.2, 2)
+            
         scores = {t: calc_mom(series) for t, series in close_all.items()}
         eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget}
-        top2 = [t for t, _ in sorted(eligible.items(), key=lambda x: x[1], reverse=True)[:TOP_N]]
-        regime_ok = (spy_6m > 0 and vix_now < 25)
+        
+        # 💡 [전략 업그레이드] 순위 방어선(Rank Buffer) 시스템 도입
+        HOLD_RANK_LIMIT = 5 # 방어선: 5위 밖으로 밀려나면 방출
+        
+        eligible_sorted = sorted(eligible.items(), key=lambda x: x[1], reverse=True)
+        rank_dict = {t: i+1 for i, (t, sc) in enumerate(eligible_sorted)} # 전체 순위표
+        absolute_top2 = [t for t, _ in eligible_sorted[:TOP_N]] # 순수 모멘텀 1, 2위
+        
+        target_portfolio = []
+        
         if rot_state['in_market']:
-            action = "EXIT" if not regime_ok else ("ROTATE" if set(top2) != set([h['ticker'] for h in rot_state['holdings']]) else "KEEP")
-        else: action = "ENTER" if regime_ok else "WAIT"
-        return {"action": action, "top2": top2, "scores": scores, "vix_now": vix_now, "spy_6m": spy_6m}
-    except: return {"action": "WAIT", "top2": [], "scores": {}, "vix_now": 0, "spy_6m": 0}
+            # 1. 기존 보유 종목 검사: 5위 이내면 방어선 발동하여 계속 유지 (수수료/노이즈 방어)
+            for h in rot_state['holdings']:
+                t = h['ticker']
+                if rank_dict.get(t, 999) <= HOLD_RANK_LIMIT:
+                    target_portfolio.append(t)
+            
+            # 2. 빈자리 채우기: 방출된 종목이 있어 자리가 남는다면, 순수 1,2위 종목으로 채움
+            for t in absolute_top2:
+                if len(target_portfolio) >= TOP_N: break
+                if t not in target_portfolio:
+                    target_portfolio.append(t)
+        else:
+            # 시장 진입 시에는 무조건 순수 모멘텀 1, 2위 매수
+            target_portfolio = absolute_top2
+
+        regime_ok = (spy_6m > 0 and vix_now < 25)
+        
+        if rot_state['in_market']:
+            # 실제 보유 종목과 목표 포트폴리오(target_portfolio)가 다를 때만 ROTATE(교체) 지시
+            action = "EXIT" if not regime_ok else ("ROTATE" if set(target_portfolio) != set([h['ticker'] for h in rot_state['holdings']]) else "KEEP")
+        else: 
+            action = "ENTER" if regime_ok else "WAIT"
+            
+        return {"action": action, "top2": target_portfolio, "scores": scores, "vix_now": vix_now, "spy_6m": spy_6m}
+    except: 
+        return {"action": "WAIT", "top2": [], "scores": {}, "vix_now": 0, "spy_6m": 0}
+
 
 # ==============================================================
 # 4. 성과 분석 함수
