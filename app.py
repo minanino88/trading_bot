@@ -303,7 +303,9 @@ async def tg_send(token_v, chat_id, text):
             return False
 
 
-@st.cache_data(ttl=300)def get_cached_portfolio_equity():
+#@st.cache_data(ttl=300)
+
+def get_cached_portfolio_equity():
     trader = KIS_Trader()
     
     print(f"🔍 토큰: {trader.token[:20] if trader.token else 'None'}")
