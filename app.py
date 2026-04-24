@@ -132,16 +132,16 @@ def get_market_data():
         if isinstance(spy_ohlc.columns, pd.MultiIndex): spy_ohlc.columns = spy_ohlc.columns.get_level_values(0)
         if isinstance(vix_data.columns, pd.MultiIndex): vix_data.columns = vix_data.columns.get_level_values(0)
 
-        # ✅ 버그 1 (치명적) 수정: yfinance 티커 1개/여러 개 분기 처리
+        # ✅ 버그 1 수정: 단일/다중 티커 처리 안전성 강화
         if isinstance(close_prices.columns, pd.MultiIndex):
             close_df = close_prices['Close']
         else:
-            # 티커가 1개일 경우 (Fallback 풀 등) MultiIndex가 아니므로 변환
-            close_df = pd.DataFrame({tickers[0]: close_prices['Close']}) if len(tickers) == 1 else close_prices
+            close_df = close_prices[['Close']].rename(columns={'Close': tickers[0]}) if len(tickers) == 1 else close_prices['Close'] if 'Close' in close_prices.columns else close_prices
 
+        # ✅ 버그 2 수정: 불필요한 DataFrame 변환 제거 및 Series 단위로 깔끔하게 계산
         vix_close = vix_data['Close']
-        spy_df = pd.DataFrame(spy_ohlc['Close'].copy()); spy_df.columns = ['Close']
-        monthly = spy_df['Close'].resample('ME').last().pct_change().dropna()
+        spy_close_series = spy_ohlc['Close'].squeeze()
+        monthly = spy_close_series.resample('ME').last().pct_change().dropna()
         
         close_all = {t: close_df[t].dropna() for t in tickers if t in close_df.columns}
         
@@ -281,8 +281,9 @@ def get_cached_portfolio_equity():
 async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
     trader = KIS_Trader(); token_v, chat_id = os.getenv('TELEGRAM_TOKEN'), os.getenv('CHAT_ID')
-    bot = Bot(token=token_v) if token_v else None
+    bot = Bot(token=token_v) if (Bot and token_v) else None    
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
+
     if spy_ohlc.empty:
         if bot: await tg_send(bot, chat_id, f"⚠️ 데이터 로드 실패: {d_msg}")
         return
@@ -378,9 +379,9 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     
     try:
         start_dt = pd.to_datetime(dates[0])
-        # ✅ 버그 3 수정: Timezone 정보가 있을 때만 localize 해제
+        # ✅ 버그 3 수정: aware -> naive 변환 시 tz_convert(None) 사용
         if spy_series.index.tz is not None:
-            spy_series.index = spy_series.index.tz_localize(None) 
+            spy_series = spy_series.tz_convert(None) 
             
         spy_sub = spy_series[spy_series.index >= start_dt]
         if not spy_sub.empty:
@@ -391,7 +392,6 @@ def plot_perf_chart(perf_data, name, color, spy_series):
         
     fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), template="plotly_dark", height=250)
     return fig
-
 
 def run_dashboard():
     now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.4.2", layout="wide")
