@@ -94,10 +94,11 @@ class KIS_Trader:
     def get_balance(self):
         try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+            exch_cd, _ = self._get_exch_info(SIGNAL_TICKER)
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
-                "OVRS_EXCG_CD": "AMEX",
+                "OVRS_EXCG_CD": exch_cd,
                 "OVRS_ORD_UNPR": "1", 
                 "ITEM_CD": "UPRO"
             }
