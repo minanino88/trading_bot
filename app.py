@@ -62,7 +62,7 @@ class KIS_Trader:
             data = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
             res = requests.post(url, headers={"content-type": "application/json"}, data=json.dumps(data)).json()
             self.token = res.get('access_token')
-        except Exception as e: print(f"Token Error: {e}")
+        except: pass
 
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
@@ -72,8 +72,13 @@ class KIS_Trader:
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
             params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": "AMEX", "OVRS_ORD_UNPR": "1", "ITEM_CD": TRADE_TICKER}
             res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
+            # ✅ 한투 서버가 거절한 진짜 이유를 깃허브 로그에 출력 (잔고가 0원일 때 원인 파악용)
+            if 'output' not in res:
+                print(f"🚨 KIS 잔고 조회 에러: {res}")
             return float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
-        except: return 0.0
+        except Exception as e:
+            print(f"🚨 KIS 시스템 에러: {e}")
+            return 0.0
 
     def get_holdings(self, ticker):
         try:
@@ -89,6 +94,8 @@ class KIS_Trader:
         try:
             # 해외주식 현재가 체결가 조회 (TR_ID: HHDFS76410100)
             url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
+            # 종목코드 앞에 시장 구분(나스닥 NASD, 아멕스 AMEX 등)을 붙여야 할 수도 있음
+            # 단순 조회를 위해 기본 포맷 사용
             params = {
                 "AUTH": "",
                 "EXCD": "NAS" if ticker not in ["UPRO", "SPY"] else "AMS",
@@ -105,6 +112,7 @@ class KIS_Trader:
             return price
         except:
             return 0.0
+
 
     def send_order(self, ticker, qty, side="BUY"):
         try:
@@ -124,11 +132,11 @@ def get_top_30_tickers():
     try:
         import io
         url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        # 봇이 아닌 일반 크롬 브라우저처럼 위장
+        # ✅ 위키피디아 403 에러 우회 (브라우저 위장)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         res = requests.get(url, headers=headers)
-        
         tables = pd.read_html(io.StringIO(res.text))
+        # 테이블 인덱스에 의존하지 않고 컬럼명을 직접 스캔 (클로드 지적 반영)
         for table in tables:
             if 'Ticker' in table.columns:
                 return [t.replace('.', '-') for t in table['Ticker'].head(30).tolist()]
@@ -138,7 +146,6 @@ def get_top_30_tickers():
     except Exception as e: 
         print(f"Wiki Parsing Error: {e}")
         return FALLBACK_POOL
-
 
 def get_market_data():
     try:
@@ -151,11 +158,13 @@ def get_market_data():
         if isinstance(spy_ohlc.columns, pd.MultiIndex): spy_ohlc.columns = spy_ohlc.columns.get_level_values(0)
         if isinstance(vix_data.columns, pd.MultiIndex): vix_data.columns = vix_data.columns.get_level_values(0)
 
+        # 단일/다중 티커 처리 안전성 강화
         if isinstance(close_prices.columns, pd.MultiIndex):
             close_df = close_prices['Close']
         else:
             close_df = close_prices[['Close']].rename(columns={'Close': tickers[0]}) if len(tickers) == 1 else close_prices['Close'] if 'Close' in close_prices.columns else close_prices
 
+        # 불필요한 DataFrame 변환 제거 및 Series 단위로 깔끔하게 계산
         vix_close = vix_data['Close']
         spy_close_series = spy_ohlc['Close'].squeeze()
         monthly = spy_close_series.resample('ME').last().pct_change().dropna()
@@ -167,8 +176,7 @@ def get_market_data():
         return pd.DataFrame(), pd.Series(), pd.Series(), {}, f"Data Error: {str(e)}"
 
 def load_rotation_state():
-    # ✅ 버그 수정: last_run_date (중복 방지 도장) 기본값 추가
-    default = {"in_market": False, "holdings": [], "entry_date": None, "last_run_date": None}
+    default = {"in_market": False, "holdings": [], "entry_date": None}
     if os.path.exists(ROTATION_STATE_FILE):
         try:
             with open(ROTATION_STATE_FILE, 'r') as f:
@@ -261,42 +269,25 @@ def calc_rotation_performance(df):
 # 5. 통신/AI & Caching
 # ==============================================================
 def ask_gemini(u_sig, r_sig):
-    api_key = os.getenv("GEMINI_API_KEY", "")
+    # ✅ Gemini 429/404 원천 차단: 한도 문제가 적고 가장 안정적인 1.5-flash 표준 호출로 완전 교체
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
-    
-    # 1차 시도: 최신 2.0 플래시 모델
-    url_2_0 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-    # 2차 시도: 안정적인 1.5 플래시 모델 (대비책)
-    url_1_5 = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
-    
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    headers = {'Content-Type': 'application/json'}
-    
     try:
-        # 1. 먼저 2.0 모델로 찔러봄
-        res = requests.post(url_2_0, headers=headers, json=payload, timeout=10)
-        
-        # 2. 만약 2.0 모델이 거절(404 등)하면 1.5 모델로 다시 시도
-        if res.status_code != 200:
-            print(f"⚠️ Gemini 2.0 실패 ({res.status_code}). 1.5 모델로 재시도합니다. 사유: {res.text}")
-            res = requests.post(url_1_5, headers=headers, json=payload, timeout=10)
-            
-        # 3. 최종 결과 반환
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        res = requests.post(url, headers={'Content-Type': 'application/json'}, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            print(f"❌ Gemini 최종 실패 ({res.status_code}): {res.text}")
+            print(f"Gemini API Error ({res.status_code}): {res.text}")
             return f"AI 거절 ({res.status_code})"
-            
-    except Exception as e: 
+    except Exception as e:
         print(f"Gemini API Error: {e}")
         return "AI 연결 실패"
 
 
 async def tg_send(token_v, chat_id, text):
-    # ✅ 버그 수정: Bot 모듈 미설치 시 예외 처리 추가
-    if not token_v or not chat_id or Bot is None: return False
+    if not token_v or not chat_id: return False
     try:
         async with Bot(token=token_v) as bot:
             await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -326,8 +317,6 @@ def get_cached_portfolio_equity():
 # ==============================================================
 async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
-    today_str = now_kst.strftime('%Y-%m-%d') # ✅ 매매 당일 도장 찍기용 문자열 생성
-
     trader = KIS_Trader(); token_v, chat_id = os.getenv('TELEGRAM_TOKEN'), os.getenv('CHAT_ID')
     bot = Bot(token=token_v) if (Bot and token_v) else None    
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
@@ -342,17 +331,12 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20,22]:
-        # ✅ 버그 수정: 예비 스케줄(21시) 중복 매수 원천 차단
-        if rot_state.get('last_run_date') == today_str:
-            print("✅ 오늘 이미 메인 매매 로직이 실행되었습니다. (중복 방지)")
-            return
-
+    if current_hour in [20,21]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
         msgs = [f"🤖 <b>통합봇 v1.4.2 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
-            if cur_p_upro > 0:
+            if cur_p_upro > 0:  # ✅ 가격이 0이 아닐 때만 계산하도록 안전장치 추가
                 qty = int((upro_gap * 0.95) / cur_p_upro)
                 if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
                     msgs.append(f"✅ UPRO 매수: {qty}주")
@@ -381,9 +365,7 @@ async def run_trading():
                 if qty >= 1 and trader.send_order(t, qty, "BUY").get('rt_cd') == '0':
                     new_h.append({"ticker": t, "qty": qty, "entry_price": p})
                     pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-            
-            # ✅ 버그 수정: 실제로 매수한 종목이 있을 때만 in_market=True로 인식하도록 로직 강화
-            rot_state.update({"in_market": len(new_h) > 0, "holdings": new_h}); save_rotation_state(rot_state); msgs.append(f"🔄 ROT 교체: {', '.join(top2)}")
+            rot_state.update({"in_market": True, "holdings": new_h}); save_rotation_state(rot_state); msgs.append(f"🔄 ROT 교체: {', '.join(top2)}")
         elif action == "EXIT" and rot_state.get('in_market'):
             for h in rot_state.get('holdings', []):
                 q = trader.get_holdings(h['ticker'])
@@ -391,17 +373,12 @@ async def run_trading():
                     cp = trader.get_current_price(h['ticker']); ret = (cp - h.get('entry_price', cp)) / max(h.get('entry_price', cp), 1) * 100
                     pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
             rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state); msgs.append("🚨 ROT 하락장 청산")
-        
-        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
-        await tg_send(token_v, chat_id, "\n".join(msgs))
-        
-        # ✅ 메인 로직 완료 도장 찍기 (내일이 되어야 다시 작동함)
-        rot_state['last_run_date'] = today_str
-        save_rotation_state(rot_state)
+        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "\n".join(msgs))
 
     elif current_hour in [1,2]:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
         if not spy_int.empty:
+            # ✅ yfinance MultiIndex 컬럼 방어
             if isinstance(spy_int.columns, pd.MultiIndex):
                 spy_int.columns = spy_int.columns.get_level_values(0)            
             if (float(spy_int['Close'].iloc[-1])/float(spy_int['Open'].iloc[0]))-1 <= -0.03:
@@ -417,6 +394,7 @@ async def run_trading():
                     rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
                 await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
 
+    
     elif current_hour in [7,8]:
         bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
         await tg_send(token_v, chat_id, msg)
@@ -428,6 +406,7 @@ async def run_trading():
 # 10. Dashboard (SPY 비교선 시각화 로직 추가!)
 # ==============================================================
 def plot_perf_chart(perf_data, name, color, spy_series):
+    """실제 성과와 SPY(존버)를 겹쳐서 그리는 헬퍼 함수"""
     fig = go.Figure()
     if not perf_data['equity_curve']: return fig
     
@@ -437,6 +416,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     
     try:
         start_dt = pd.to_datetime(dates[0])
+        # ✅ 버그 3 수정: aware -> naive 변환 시 tz_convert(None) 사용
         if spy_series.index.tz is not None:
             spy_series = spy_series.tz_convert(None) 
             
@@ -489,12 +469,14 @@ def run_dashboard():
         st.subheader("🚀 UPRO 상세 성과"); k1, k2, k3, k4 = st.columns(4)
         k1.metric("수익률", f"{upro_perf['total_return']:+.1f}%"); k2.metric("MDD", f"-{upro_perf['mdd']:.1f}%")
         k3.metric("승률", f"{upro_perf['win_rate']}%"); k4.metric("샤프지수", upro_perf['sharpe'])
+        # [수정] 헬퍼 함수 적용으로 SPY 비교선 출력
         if upro_perf['equity_curve']: 
             st.plotly_chart(plot_perf_chart(upro_perf, 'UPRO', '#58a6ff', spy_ohlc['Close']), use_container_width=True)
             
         st.divider(); st.subheader("🔄 ROT 상세 성과"); r1, r2, r3, r4 = st.columns(4)
         r1.metric("수익률", f"{rot_perf['total_return']:+.1f}%"); r2.metric("MDD", f"-{rot_perf['mdd']:.1f}%")
         r3.metric("승률", f"{rot_perf['win_rate']}%"); r4.metric("거래횟수", rot_perf['total_trades'])
+        # [수정] 헬퍼 함수 적용으로 SPY 비교선 출력
         if rot_perf['equity_curve']: 
             st.plotly_chart(plot_perf_chart(rot_perf, 'ROT', '#fbbf24', spy_ohlc['Close']), use_container_width=True)
 
