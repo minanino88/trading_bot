@@ -86,11 +86,28 @@ class KIS_Trader:
         except: return 0
 
     def get_current_price(self, ticker):
-        try:
+    try:
+        # 해외주식 현재가 체결가 조회 (TR_ID: HHDFS76410100)
+        url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
+        # 종목코드 앞에 시장 구분(나스닥 NASD, 아멕스 AMEX 등)을 붙여야 할 수도 있음
+        # 단순 조회를 위해 기본 포맷 사용
+        params = {
+            "AUTH": "",
+            "EXCD": "NAS" if ticker not in ["UPRO", "SPY"] else "AMS",
+            "SYMB": ticker
+        }
+        res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
+        price = float(res.get('output', {}).get('last', 0))
+        
+        # 만약 한투 API가 일시적으로 실패할 경우를 대비한 2중 방어 (yfinance)
+        if price == 0:
             df = yf.download(ticker, period='1d', interval='1m', progress=False)
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-            return float(df['Close'].iloc[-1]) if not df.empty else 0.0
-        except: return 0.0
+            price = float(df['Close'].iloc[-1])
+            
+        return price
+    except:
+        return 0.0
+
 
     def send_order(self, ticker, qty, side="BUY"):
         try:
@@ -251,17 +268,20 @@ def ask_gemini(u_sig, r_sig):
         return res.json()['candidates'][0]['content']['parts'][0]['text'].strip() if res.status_code == 200 else "AI 분석 불가"
     except: return "AI 연결 실패"
 
-async def tg_send(bot, chat_id, text):
-    if not bot or not chat_id: return False
-    try: 
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+
+async def tg_send(token_v, chat_id, text):
+    if not token_v or not chat_id: return False
+    try:
+        async with Bot(token=token_v) as bot:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
         return True
-    except Exception as e: 
-        print(f"Telegram HTML Error: {e}") # Actions 로그용
-        try: 
-            await bot.send_message(chat_id=chat_id, text=text)
+    except Exception as e:
+        print(f"Telegram HTML Error: {e}")
+        try:
+            async with Bot(token=token_v) as bot:
+                await bot.send_message(chat_id=chat_id, text=text)
             return True
-        except Exception as e2: 
+        except Exception as e2:
             print(f"Telegram Plain Error: {e2}")
             return False
 
