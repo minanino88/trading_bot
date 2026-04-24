@@ -84,7 +84,9 @@ class KIS_Trader:
             data = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
             res = requests.post(url, headers={"content-type": "application/json"}, data=json.dumps(data)).json()
             self.token = res.get('access_token')
-        except: pass
+        except Exception as e:
+            print(f"KIS token ERROR: {e}")
+
 
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
