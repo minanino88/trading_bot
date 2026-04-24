@@ -273,12 +273,15 @@ async def run_trading():
         msgs = [f"🤖 <b>통합봇 v1.4.2 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
-            qty = int((upro_gap * 0.95) / cur_p_upro)
-            if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매수: {qty}주")
-                with open(STATE_FILE, 'w') as f:
-                    json.dump({"in_market": True, "last_exit_price": 0}, f)
-                pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+            if cur_p_upro > 0:  # ✅ 가격이 0이 아닐 때만 계산하도록 안전장치 추가
+                qty = int((upro_gap * 0.95) / cur_p_upro)
+                if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
+                    msgs.append(f"✅ UPRO 매수: {qty}주")
+                    with open(STATE_FILE, 'w') as f:
+                        json.dump({"in_market": True, "last_exit_price": 0}, f)
+                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+            else:
+                msgs.append("⚠️ UPRO 현재가 수신 실패(0.0)로 매수 보류")
         elif u_sig == "EXIT" and upro_qty > 0:
             if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
                 msgs.append(f"✅ UPRO 매도: {upro_qty}주")
@@ -311,19 +314,24 @@ async def run_trading():
 
     elif current_hour == 1:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
-        if not spy_int.empty and (float(spy_int['Close'].iloc[-1])/float(spy_int['Open'].iloc[0]))-1 <= -0.03:
-            q_u = trader.get_holdings(TRADE_TICKER)
-            if q_u > 0 and trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
-                pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
-            if rot_state.get('in_market'):
-                for h in rot_state.get('holdings', []):
-                    q_h = trader.get_holdings(h['ticker'])
-                    if q_h > 0 and trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
-                        cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
-                        pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-                rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
-            await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
+        if not spy_int.empty:
+            # ✅ yfinance MultiIndex 컬럼 방어
+            if isinstance(spy_int.columns, pd.MultiIndex):
+                spy_int.columns = spy_int.columns.get_level_values(0)            
+            if (float(spy_int['Close'].iloc[-1])/float(spy_int['Open'].iloc[0]))-1 <= -0.03:
+                q_u = trader.get_holdings(TRADE_TICKER)
+                if q_u > 0 and trader.send_order(TRADE_TICKER, q_u, "SELL").get('rt_cd') == '0':
+                    pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": q_u, "Price": trader.get_current_price(TRADE_TICKER)}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                if rot_state.get('in_market'):
+                    for h in rot_state.get('holdings', []):
+                        q_h = trader.get_holdings(h['ticker'])
+                        if q_h > 0 and trader.send_order(h['ticker'], q_h, "SELL").get('rt_cd') == '0':
+                            cp_h = trader.get_current_price(h['ticker']); ret_h = (cp_h - h.get('entry_price', cp_h)) / max(h.get('entry_price', cp_h), 1) * 100
+                            pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                    rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state)
+                await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
 
+    
     elif current_hour == 7:
         bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
         await tg_send(bot, chat_id, msg)
