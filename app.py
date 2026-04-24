@@ -200,15 +200,46 @@ def get_top_30_tickers():
 
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
-    for attempt in range(max_retry):
-        try:
-            df = yf.download(ticker_or_list, period=period, interval=interval, progress=False)
-            if df is not None and not df.empty: return df
-            print(f"⚠️ yfinance 빈 응답 ({ticker_or_list}, 시도 {attempt+1}/{max_retry})")
-        except Exception as e:
-            print(f"⚠️ yfinance 에러 ({ticker_or_list}, 시도 {attempt+1}/{max_retry}): {e}")
-        if attempt < max_retry - 1: time.sleep(5)
-    return pd.DataFrame()
+    """yfinance 재시도 + 리스트일 경우 20개씩 배치 처리 (타임아웃 방지)"""
+    # 단일 티커는 기존 방식 그대로
+    if isinstance(ticker_or_list, str):
+        for attempt in range(max_retry):
+            try:
+                df = yf.download(ticker_or_list, period=period, interval=interval, progress=False)
+                if df is not None and not df.empty: return df
+                print(f"⚠️ yfinance 빈 응답 ({ticker_or_list}, 시도 {attempt+1}/{max_retry})")
+            except Exception as e:
+                print(f"⚠️ yfinance 에러 ({ticker_or_list}, 시도 {attempt+1}/{max_retry}): {e}")
+            if attempt < max_retry - 1: time.sleep(5)
+        return pd.DataFrame()
+
+    # 리스트는 20개씩 배치 처리 (100개 한번에 요청하면 야후가 타임아웃으로 차단)
+    BATCH_SIZE = 20
+    all_dfs = []
+    for i in range(0, len(ticker_or_list), BATCH_SIZE):
+        batch = ticker_or_list[i:i+BATCH_SIZE]
+        for attempt in range(max_retry):
+            try:
+                df = yf.download(batch, period=period, interval=interval, progress=False)
+                if df is not None and not df.empty:
+                    all_dfs.append(df)
+                    break
+                print(f"⚠️ yfinance 빈 응답 (배치 {i//BATCH_SIZE+1}, 시도 {attempt+1}/{max_retry})")
+            except Exception as e:
+                print(f"⚠️ yfinance 에러 (배치 {i//BATCH_SIZE+1}, 시도 {attempt+1}/{max_retry}): {e}")
+            if attempt < max_retry - 1: time.sleep(3)
+        time.sleep(1)  # 배치 사이 짧은 휴식으로 IP 차단 방지
+
+    if not all_dfs: return pd.DataFrame()
+    # 배치 결과 합치기 - MultiIndex 컬럼 기준
+    try:
+        combined = pd.concat(all_dfs, axis=1)
+        # 중복 컬럼 제거
+        combined = combined.loc[:, ~combined.columns.duplicated()]
+        return combined
+    except Exception as e:
+        print(f"⚠️ 배치 합치기 실패: {e}")
+        return all_dfs[0] if all_dfs else pd.DataFrame()
 
 def get_market_data():
     try:
