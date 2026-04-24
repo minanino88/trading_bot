@@ -303,14 +303,31 @@ async def tg_send(token_v, chat_id, text):
             return False
 
 
-@st.cache_data(ttl=300)
-def get_cached_portfolio_equity():
-    trader = KIS_Trader(); bal = trader.get_balance(); rot_state = load_rotation_state()
-    upro_qty = trader.get_holdings(TRADE_TICKER); cur_p_upro = trader.get_current_price(TRADE_TICKER)
+@st.cache_data(ttl=300)def get_cached_portfolio_equity():
+    trader = KIS_Trader()
+    
+    print(f"🔍 토큰: {trader.token[:20] if trader.token else 'None'}")
+    
+    bal = trader.get_balance()
+    print(f"🔍 가용현금: {bal}")
+    
+    rot_state = load_rotation_state()
+    upro_qty = trader.get_holdings(TRADE_TICKER)
+    print(f"🔍 UPRO 보유수량: {upro_qty}")
+    
+    cur_p_upro = trader.get_current_price(TRADE_TICKER)
+    print(f"🔍 UPRO 현재가: {cur_p_upro}")
+    
     upro_value = upro_qty * cur_p_upro
-    rot_value = sum(trader.get_holdings(h['ticker']) * trader.get_current_price(h['ticker']) for h in rot_state.get('holdings', []))
+    rot_value = sum(
+        trader.get_holdings(h['ticker']) * trader.get_current_price(h['ticker']) 
+        for h in rot_state.get('holdings', [])
+    )
     total_equity = bal + upro_value + rot_value
+    print(f"🔍 총자산: {total_equity}")
+    
     return total_equity, bal, upro_qty, upro_value, rot_value
+
 
 # ==============================================================
 # 9. 자동매매 (1.4.1 로직 완벽 유지)
