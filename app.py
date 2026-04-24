@@ -67,28 +67,29 @@ class KIS_Trader:
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
-    def get_balance(self):
+        def get_balance(self):
         try:
+            import json
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
-                "OVRS_EXCG_CD": "AMEX",  # ✅ 매수할 때 썼던 그 AMEX!
+                "OVRS_EXCG_CD": "AMEX",
                 "OVRS_ORD_UNPR": "1", 
                 "ITEM_CD": "UPRO"
             }
             res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
             
-            if 'output' not in res:
-                print(f"🚨 KIS 잔고 조회 에러 응답: {res}")
+            # 🔥 클로드가 말한 핵심: 한투가 보내는 모든 데이터를 가감 없이 전부 출력!
+            print(f"📊 잔고 RAW 전체: {json.dumps(res, ensure_ascii=False)}")  
             
-            # ord_psbl_frcr_amt: 주문 가능한 순수 달러(USD) 가용 금액
             usd_cash = float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
-            print(f"💰 [조회성공] 달러 가용 잔고: ${usd_cash}")
+            print(f"💰 달러 가용 잔고: ${usd_cash}")
             return usd_cash
         except Exception as e:
             print(f"🚨 KIS 시스템 에러: {e}")
             return 0.0
+
 
     def get_holdings(self, ticker):
         try:
