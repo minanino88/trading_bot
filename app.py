@@ -358,8 +358,8 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    # 💡 [버그 수정 1] yml 기준 메인/예비 시간대 포함 (20, 21, 22, 23 등 모두 커버)
-    if current_hour in [20, 21, 22, 23, 0]:
+    # 💡 [버그 수정 1] yml 기준 메인/예비 시간대 포함 
+    if current_hour in [20, 3]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
         msgs = [f"🤖 <b>통합봇 v1.5.4 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
@@ -429,7 +429,7 @@ async def run_trading():
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "\n".join(msgs))
 
     # 💡 [버그 수정 3] 긴급 탈출은 새벽 시간대로 분리
-    elif current_hour in [1, 2, 3, 4, 5]:
+    elif current_hour in [1, 2]:
         spy_int = yf.download(SIGNAL_TICKER, period='5d', interval='5m', progress=False)
         if not spy_int.empty:
             if isinstance(spy_int.columns, pd.MultiIndex):
