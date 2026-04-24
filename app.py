@@ -67,9 +67,9 @@ class KIS_Trader:
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
-    def get_balance(self):
+        def get_balance(self):
         try:
-            # ✅ 종목 매수가능금액이 아닌, '해당 계좌의 달러 예수금 총액'을 직행으로 가져옵니다.
+            # ✅ '매수가능금액' 묻는 멍청한 API 버리고, '계좌 달러 예수금 총액'을 직접 묻습니다.
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
             params = {
                 "CANO": self.cano, 
@@ -81,11 +81,7 @@ class KIS_Trader:
             }
             res = requests.get(url, headers=self._headers("JTTT3012R"), params=params).json()
             
-            if 'output2' not in res:
-                print(f"🚨 KIS 잔고 조회 에러: {res}")
-                return 0.0
-                
-            # output2의 'frcr_dncl_amt2'는 계좌에 있는 순수 외화(달러) 예수금을 의미합니다.
+            # output2의 'frcr_dncl_amt2'가 실제 외화(달러) 예수금 총액입니다.
             usd_cash = float(res.get('output2', {}).get('frcr_dncl_amt2', 0))
             return usd_cash
         except Exception as e:
