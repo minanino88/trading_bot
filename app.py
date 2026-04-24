@@ -339,7 +339,7 @@ def ask_gemini(u_sig, r_sig):
 
     # 💡 핵심: 상위 모델부터 순차적으로 시도 (429 에러 발생 시 다음 모델로)
     # 현재 구글 API에서 작동하는 최신 모델 명칭으로 구성했습니다.
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
     
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
