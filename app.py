@@ -69,13 +69,25 @@ class KIS_Trader:
 
     def get_balance(self):
         try:
-            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
-            params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": "AMEX", "OVRS_ORD_UNPR": "1", "ITEM_CD": TRADE_TICKER}
-            res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
-            # ✅ 한투 서버가 거절한 진짜 이유를 깃허브 로그에 출력 (잔고가 0원일 때 원인 파악용)
-            if 'output' not in res:
+            # ✅ 종목 매수가능금액이 아닌, '해당 계좌의 달러 예수금 총액'을 직행으로 가져옵니다.
+            url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+            params = {
+                "CANO": self.cano, 
+                "ACNT_PRDT_CD": self.acnt_prdt_cd, 
+                "OVRS_EXCG_CD": "NASD", 
+                "TR_CRCY_CD": "USD", 
+                "CTX_AREA_FK200": "", 
+                "CTX_AREA_NK200": ""
+            }
+            res = requests.get(url, headers=self._headers("JTTT3012R"), params=params).json()
+            
+            if 'output2' not in res:
                 print(f"🚨 KIS 잔고 조회 에러: {res}")
-            return float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
+                return 0.0
+                
+            # output2의 'frcr_dncl_amt2'는 계좌에 있는 순수 외화(달러) 예수금을 의미합니다.
+            usd_cash = float(res.get('output2', {}).get('frcr_dncl_amt2', 0))
+            return usd_cash
         except Exception as e:
             print(f"🚨 KIS 시스템 에러: {e}")
             return 0.0
@@ -269,19 +281,23 @@ def calc_rotation_performance(df):
 # 5. 통신/AI & Caching
 # ==============================================================
 def ask_gemini(u_sig, r_sig):
-    # ✅ Gemini 429/404 원천 차단: 한도 문제가 적고 가장 안정적인 1.5-flash 표준 호출로 완전 교체
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
+    
+    # ✅ 404 에러가 나지 않는 가장 기본적이고 범용적인 모델(gemini-pro)로 고정
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {'Content-Type': 'application/json'}
+    
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        res = requests.post(url, headers={'Content-Type': 'application/json'}, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10)
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
             print(f"Gemini API Error ({res.status_code}): {res.text}")
             return f"AI 거절 ({res.status_code})"
-    except Exception as e:
+    except Exception as e: 
         print(f"Gemini API Error: {e}")
         return "AI 연결 실패"
 
