@@ -69,22 +69,20 @@ class KIS_Trader:
 
     def get_balance(self):
         try:
-            # ✅ UPRO/SPY의 실제 고향인 NYSE Arca(NYS) 거래소 코드로 잔고를 조회합니다.
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
-                "OVRS_EXCG_CD": "NYS",   # NASD에서 NYS로 변경
+                "OVRS_EXCG_CD": "AMEX",  # ✅ 매수할 때 썼던 그 AMEX!
                 "OVRS_ORD_UNPR": "1", 
                 "ITEM_CD": "UPRO"
             }
             res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
             
-            # 📊 로그 확인용 (문제가 계속될 경우를 대비)
             if 'output' not in res:
                 print(f"🚨 KIS 잔고 조회 에러 응답: {res}")
             
-            # ord_psbl_frcr_amt: 주문 가능한 외화(달러) 금액
+            # ord_psbl_frcr_amt: 주문 가능한 순수 달러(USD) 가용 금액
             usd_cash = float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
             print(f"💰 [조회성공] 달러 가용 잔고: ${usd_cash}")
             return usd_cash
@@ -98,7 +96,7 @@ class KIS_Trader:
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
-                "OVRS_EXCG_CD": "NYS",  # 거래소 코드 통일
+                "OVRS_EXCG_CD": "AMEX",  # ✅ 조회도 AMEX로 통일
                 "TR_CRCY_CD": "USD", 
                 "CTX_AREA_FK200": "", 
                 "CTX_AREA_NK200": ""
@@ -106,9 +104,9 @@ class KIS_Trader:
             res = requests.get(url, headers=self._headers("JTTT3012R"), params=params).json()
             
             for item in res.get('output1', []):
-                # 종목 코드 비교
+                # 종목 코드가 일치하는지 확인
                 if item.get('pdno') == ticker or item.get('ovrs_pdno') == ticker:
-                    # ✅ 클로드 조언: 체결 수량이 아닌 '실제 잔고 수량' 필드(ovrs_cblc_qty) 우선 사용
+                    # ✅ 클로드가 짚어준 핵심: '오늘 체결량'이 아닌 '실제 보유량' 필드 사용
                     qty = int(float(item.get('ovrs_cblc_qty', item.get('ccld_qty_smtl', 0))))
                     print(f"📦 {ticker} 보유 확인: {qty}주")
                     return qty
