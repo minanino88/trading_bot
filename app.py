@@ -65,6 +65,19 @@ class KIS_Trader:
         self.token        = None
         self._set_token()
 
+    def _get_exch_info(self, ticker):
+        """티커에 따른 거래소 코드(주문용)와 시장 코드(조회용) 반환"""
+        # AMEX/ARCA 상장 ETF 리스트
+        amex_list = ["UPRO", "SPY", "TQQQ", "SQQQ", "VOO", "IVV"]
+        # NYSE 상장 종목 (나스닥 100 외 종목 확장 대비)
+        nyse_list = ["VRT", "UNH", "JPM", "V", "MA"] 
+        if ticker in amex_list:
+            return "AMEX", "AMS"
+        elif ticker in nyse_list:
+            return "NYSE", "NYS"
+        else:
+            return "NASD", "NAS"
+        
     def _set_token(self):
         try:
             url  = f"{self.base_url}/oauth2/tokenP"
@@ -98,10 +111,11 @@ class KIS_Trader:
     def get_holdings(self, ticker):
         try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+            exch_cd, _ = self._get_exch_info(ticker)
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
-                "OVRS_EXCG_CD": "AMEX",
+                "OVRS_EXCG_CD": exch_cd,
                 "TR_CRCY_CD": "USD", 
                 "CTX_AREA_FK200": "", 
                 "CTX_AREA_NK200": ""
@@ -129,7 +143,7 @@ class KIS_Trader:
 
         try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
-            excd = "AMS" if ticker in ["UPRO", "SPY"] else "NAS"
+            _, excd = self._get_exch_info(ticker) 
             params = {"AUTH": "", "EXCD": excd, "SYMB": ticker}
             res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
             price = float(res.get('output', {}).get('last', 0))
@@ -148,7 +162,7 @@ class KIS_Trader:
                 print(f"🚨 [주문차단] {ticker} 현재가 0원, {side} 주문 취소")
                 return {"rt_cd": "1", "msg1": f"현재가 수신 실패(0원) - {ticker} {side} 취소"}
             order_p = curr_p * 1.01 if side == "BUY" else curr_p * 0.99
-            exch_cd = "AMEX" if ticker in ["UPRO", "SPY"] else "NASD"
+            exch_cd, _ = self._get_exch_info(ticker) # 💡 하드코딩 대신 함수 호출
             data = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": exch_cd, "PDNO": ticker, "ORD_QTY": str(int(qty)), "OVRS_ORD_UNPR": f"{order_p:.2f}", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
             return requests.post(url, headers=self._headers(tr_id), data=json.dumps(data)).json()
         except Exception as e: return {"rt_cd": "1", "msg1": str(e)}
@@ -156,7 +170,7 @@ class KIS_Trader:
 # ==============================================================
 # 3. 데이터 및 상태 로직
 # ==============================================================
-def get_nasdaq100_tickers():
+def get_top_30_tickers():
     try:
         import io
         url = "https://en.wikipedia.org/wiki/Nasdaq-100"
@@ -178,6 +192,8 @@ def get_nasdaq100_tickers():
     except Exception as e:
         print(f"⚠️ 위키 파싱 실패, Fallback 사용: {e}")
         return FALLBACK_POOL
+
+
 
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
@@ -313,20 +329,32 @@ def calc_rotation_performance(df):
 def ask_gemini(u_sig, r_sig):
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key: return "API 키 없음"
+    
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        if res.status_code == 200:
-            return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        else:
-            print(f"🚨 [AI 에러 원본] 상태코드: {res.status_code}, 내용: {res.text}")
-            return f"AI 연결 지연 ({res.status_code})"
-    except Exception as e: 
-        print(f"🚨 [AI 통신 에러] {e}")
-        return "AI 연결 실패"
+
+    # 💡 핵심: 상위 모델부터 순차적으로 시도 (429 에러 발생 시 다음 모델로)
+    # 현재 구글 API에서 작동하는 최신 모델 명칭으로 구성했습니다.
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            if res.status_code == 200:
+                return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            elif res.status_code == 429:
+                print(f"⚠️ {model} 할당량 초과(429), 다음 모델로 폴백 시도...")
+                continue # 다음 모델로 루프 진행
+            else:
+                print(f"🚨 {model} 에러 ({res.status_code}): {res.text[:100]}")
+                continue
+        except Exception as e:
+            print(f"🚨 {model} 통신 예외 발생: {e}")
+            continue
+            
+    return "AI 연결 실패 (모든 모델 Quota 초과)"
 
 async def tg_send(token_v, chat_id, text):
     if not token_v or not chat_id: return False
@@ -359,7 +387,9 @@ async def run_trading():
     now_kst = dt.now(KST); current_hour = now_kst.hour
     trader = KIS_Trader(); token_v, chat_id = os.getenv('TELEGRAM_TOKEN'), os.getenv('CHAT_ID')
     spy_ohlc, monthly, vix_close, close_all, d_msg = get_market_data()
-    if spy_ohlc.empty: return
+    if spy_ohlc.empty: 
+        await tg_send(token_v, chat_id, f"⚠️ 데이터 수신 실패 ({d_msg})") # 👈 알람 추가
+        return
     rot_state = load_rotation_state()
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
     per_stock_budget = (total_equity * ROTATION_RATIO * 0.95) / TOP_N
