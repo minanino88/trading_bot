@@ -366,7 +366,7 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20, 1]:
+    if current_hour in [20, 2]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
         msgs = [f"🤖 <b>통합봇 v1.5.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
