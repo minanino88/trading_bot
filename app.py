@@ -316,7 +316,7 @@ async def run_trading():
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
         action, top2 = r_sig['action'], r_sig['top2']
-        if action in ["ENTER", "ROTATE"]:
+        if action in ["ENTER", "ROTATE"] and top2:
             for h in rot_state.get('holdings', []):
                 q = trader.get_holdings(h['ticker'])
                 if q > 0 and trader.send_order(h['ticker'], q, "SELL").get('rt_cd') == '0':
