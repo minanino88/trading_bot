@@ -156,7 +156,7 @@ class KIS_Trader:
 # ==============================================================
 # 3. 데이터 및 상태 로직
 # ==============================================================
-def get_top_30_tickers():
+def get_nasdaq100_tickers():
     try:
         import io
         url = "https://en.wikipedia.org/wiki/Nasdaq-100"
@@ -164,14 +164,21 @@ def get_top_30_tickers():
         res = requests.get(url, headers=headers)
         tables = pd.read_html(io.StringIO(res.text))
         for table in tables:
-            if 'Ticker' in table.columns:
-                return [t.replace('.', '-') for t in table['Ticker'].head(30).tolist()]
-            elif 'Symbol' in table.columns:
-                return [t.replace('.', '-') for t in table['Symbol'].head(30).tolist()]
+            # 'Ticker' 또는 'Symbol' 컬럼이 있는 테이블을 찾음
+            target_col = None
+            if 'Ticker' in table.columns: target_col = 'Ticker'
+            elif 'Symbol' in table.columns: target_col = 'Symbol'
+            
+            if target_col:
+                # head(30)을 제거하여 100개 전체 종목을 가져옴
+                full_list = [t.replace('.', '-') for t in table[target_col].tolist()]
+                print(f"✅ 나스닥 100 종목 확보: {len(full_list)}개")
+                return full_list
         return FALLBACK_POOL
-    except Exception as e: 
-        print(f"Wiki Parsing Error: {e}")
+    except Exception as e:
+        print(f"⚠️ 위키 파싱 실패, Fallback 사용: {e}")
         return FALLBACK_POOL
+
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
     for attempt in range(max_retry):
