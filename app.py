@@ -342,7 +342,7 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20,21]:
+    if current_hour in [20,22]:
         # ✅ 버그 수정: 예비 스케줄(21시) 중복 매수 원천 차단
         if rot_state.get('last_run_date') == today_str:
             print("✅ 오늘 이미 메인 매매 로직이 실행되었습니다. (중복 방지)")
