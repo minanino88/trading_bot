@@ -268,7 +268,7 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour == 20:
+    if current_hour in [20,21]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
         msgs = [f"🤖 <b>통합봇 v1.4.2 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
@@ -312,7 +312,7 @@ async def run_trading():
             rot_state.update({"in_market": False, "holdings": []}); save_rotation_state(rot_state); msgs.append("🚨 ROT 하락장 청산")
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(bot, chat_id, "\n".join(msgs))
 
-    elif current_hour == 1:
+    elif current_hour in [1,2]:
         spy_int = yf.download(SIGNAL_TICKER, period='1d', interval='5m', progress=False)
         if not spy_int.empty:
             # ✅ yfinance MultiIndex 컬럼 방어
@@ -332,7 +332,7 @@ async def run_trading():
                 await tg_send(bot, chat_id, "🚨 긴급 탈출 실행 완료")
 
     
-    elif current_hour == 7:
+    elif current_hour in [7,8]:
         bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
         await tg_send(bot, chat_id, msg)
     
