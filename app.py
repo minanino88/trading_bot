@@ -67,7 +67,7 @@ class KIS_Trader:
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
-        def get_balance(self):
+    def get_balance(self):
         try:
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
             # 클로드 조언 반영: 특정 거래소(AMEX) 대신 보통 전체가 조회되는 NASD 사용
