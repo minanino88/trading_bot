@@ -1,10 +1,10 @@
-name: Unified Trading Bot v1.3.2  # 반드시 소문자 n
+name: Unified Trading Bot v1.4.2
 
 on:
   schedule:
-    - cron: '16 11 * * 1-5'   # KST 20:01 (월~금) - 지연 방지를 위해 1분 추가
-    - cron: '7 16 * * 1-5'   # KST 01:01 (화~토 새벽)
-    - cron: '7 22 * * 1-5'   # KST 07:01 (화~토 아침)
+    - cron: '16 11 * * 1-5'  # KST 20:16 (월~금) - 지연 방지를 위해 16분으로 셋팅
+    - cron: '7 16 * * 1-5'   # KST 01:07 (화~토 새벽)
+    - cron: '7 22 * * 1-5'   # KST 07:07 (화~토 아침)
   workflow_dispatch:        # 수동 버튼 활성화
 
 permissions:
@@ -35,11 +35,11 @@ jobs:
           CHAT_ID:          ${{ secrets.CHAT_ID }}
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
           GITHUB_ACTIONS:   'true'
-        run: python app.py  # 👈 민환님의 파일명에 맞춰 app.py로 수정 완료
+        run: python app.py
 
       - name: Commit state & logs
         run: |
           git config --global user.name 'github-actions'
           git config --global user.email 'actions@github.com'
           git add trend_state.json rotation_state.json history_trend.csv history_rotation.csv || true
-          git diff --staged --quiet || (git commit -m "auto-update [$(date +'%Y-%m-%d %H:%M') KST]" && git pull --rebase && git push)
+          git diff --staged --quiet || (git commit -m "auto-update [$(TZ='Asia/Seoul' date +'%Y-%m-%d %H:%M') KST]" && git pull --rebase && git push)
