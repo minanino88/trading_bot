@@ -1,11 +1,13 @@
 """
-Unified Trading Bot v1.6.1 (Masterpiece Edition)
-[Fix] 크리티컬 버그 7개 + 소소한 경고 5개 완벽 해결
-1. KIS 잔고 조회 에러(-1)와 실제 잔고 없음(0) 분리 → q==0 고스트 포지션 완벽 차단
-2. Nasdaq 100 전체 종목 풀 복구 (.head(30) 제거) + 20개씩 배치 조회로 타임아웃 방어
-3. spy_close_col.iloc[:, 0] 적용으로 squeeze() 데이터 1행 스칼라 변환 에러 보호
-4. 성과 분석 시 거래 횟수 3회 미만(trades < 3)일 때 샤프지수 에러 보호
-5. 긴급탈출 & ROT EXIT 로직 시 매도/조회 실패 종목 안전 잔류 처리
+Unified Trading Bot v1.6.3 (Masterpiece Edition)
+[Update] 잦은 매매 방지를 위한 Score Buffer (5.0포인트) 로직 적용
+[Fix] KIS 잔고 조회 에러(-1)와 실제 잔고 없음(0) 분리 → q==0 고스트 포지션 완벽 차단
+[Fix] Nasdaq 100 전체 종목 풀 복구 (.head(30) 제거) + 20개씩 배치 조회로 타임아웃 방어
+[Fix] spy_close_col.iloc[:, 0] 적용으로 squeeze() 데이터 1행 스칼라 변환 에러 보호
+[Fix] 성과 분석 시 거래 횟수 3회 미만(trades < 3)일 때 샤프지수 에러 보호
+[Fix] 긴급탈출 & ROT EXIT 로직 시 매도/조회 실패 종목 안전 잔류 처리
+[Fix] ★ (v1.6.3) 예산 부족으로 인한 빈 포트폴리오(전량매도) 엣지케이스 완벽 방어
+[Fix] ★ (v1.6.3) Score Buffer 종목 교체 시 도전자 vs 방어자 1:1 데스매치 로직으로 정확도 100% 개선
 """
 
 import os
@@ -41,7 +43,6 @@ TRADE_TICKER  = 'UPRO'
 STATE_FILE    = 'trend_state.json'
 HISTORY_FILE  = 'history_trend.csv'
 
-# 위키피디아 파싱 실패 시 사용할 넉넉한 20개 예비 풀
 FALLBACK_POOL = [
     'NVDA', 'TSLA', 'META', 'AAPL', 'MSFT', 'AMZN', 'GOOGL',
     'AVGO', 'COST', 'NFLX', 'AMD', 'ADBE', 'QCOM', 'INTC',
@@ -93,7 +94,6 @@ class KIS_Trader:
                 "OVRS_EXCG_CD": "AMEX", "OVRS_ORD_UNPR": "1", "ITEM_CD": "UPRO"
             }
             res = requests.get(url, headers=self._headers("JTTT3007R"), params=params).json()
-            print(f"📊 잔고 RAW 전체: {json.dumps(res, ensure_ascii=False)}")  
             return float(res.get('output', {}).get('ord_psbl_frcr_amt', 0))
         except Exception as e:
             print(f"🚨 KIS 시스템 에러: {e}")
@@ -112,10 +112,10 @@ class KIS_Trader:
             for item in res.get('output1', []):
                 if item.get('pdno') == ticker or item.get('ovrs_pdno') == ticker:
                     return int(float(item.get('ovrs_cblc_qty', item.get('ccld_qty_smtl', 0))))
-            return 0  # 💡 실제 보유량이 없는 경우 (True Zero)
+            return 0  
         except Exception as e: 
             print(f"🚨 KIS 보유종목 조회 에러: {e}")
-            return -1 # 💡 [버그 1 수정] 통신 에러 시 -1을 반환하여 고스트 포지션 삭제 방어
+            return -1 
 
     def get_current_price(self, ticker):
         try:
@@ -162,7 +162,6 @@ def get_nasdaq_100_tickers():
         res = requests.get(url, headers=headers)
         tables = pd.read_html(io.StringIO(res.text))
         for table in tables:
-            # 💡 [버그 4 수정] .head(30) 제거하여 100개 전체 종목 파싱
             if 'Ticker' in table.columns: return [t.replace('.', '-') for t in table['Ticker'].tolist()]
             elif 'Symbol' in table.columns: return [t.replace('.', '-') for t in table['Symbol'].tolist()]
         return FALLBACK_POOL
@@ -178,7 +177,6 @@ def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retr
             if attempt < max_retry - 1: time.sleep(5)
         return pd.DataFrame()
 
-    # 💡 100개 종목을 20개씩 쪼개서 다운로드하여 야후 API 타임아웃 차단
     BATCH_SIZE = 20
     all_dfs = []
     for i in range(0, len(ticker_or_list), BATCH_SIZE):
@@ -220,13 +218,11 @@ def get_market_data():
         else: close_df = close_prices[['Close']].rename(columns={'Close': tickers[0]}) if len(tickers) == 1 else close_prices['Close'] if 'Close' in close_prices.columns else close_prices
 
         vix_close = vix_data['Close']
-        
-        # 💡 [버그 2 수정] squeeze() 대신 iloc[:, 0] 적용으로 스칼라 변환 보호
         spy_close_col = spy_ohlc['Close']
         spy_close_series = spy_close_col.iloc[:, 0] if isinstance(spy_close_col, pd.DataFrame) else spy_close_col
         monthly = spy_close_series.resample('ME').last().pct_change().dropna()
-        
         close_all = {t: close_df[t].dropna() for t in tickers if t in close_df.columns}
+        
         return spy_ohlc, monthly, vix_close, close_all, "Success"
     except Exception as e: 
         return pd.DataFrame(), pd.Series(), pd.Series(), {}, f"Data Error: {str(e)}"
@@ -283,43 +279,57 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
         scores = {t: calc_mom(series) for t, series in close_all.items()}
         eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget}
         
-        # 💡 [전략 업그레이드] 순위 방어선(Rank Buffer) 시스템 도입
-        HOLD_RANK_LIMIT = 5 # 방어선: 5위 밖으로 밀려나면 방출
+        SCORE_MARGIN = 5.0
         
         eligible_sorted = sorted(eligible.items(), key=lambda x: x[1], reverse=True)
-        rank_dict = {t: i+1 for i, (t, sc) in enumerate(eligible_sorted)} # 전체 순위표
-        absolute_top2 = [t for t, _ in eligible_sorted[:TOP_N]] # 순수 모멘텀 1, 2위
+        absolute_top2 = [t for t, _ in eligible_sorted[:TOP_N]]
         
         target_portfolio = []
         
-        if rot_state['in_market']:
-            # 1. 기존 보유 종목 검사: 5위 이내면 방어선 발동하여 계속 유지 (수수료/노이즈 방어)
-            for h in rot_state['holdings']:
-                t = h['ticker']
-                if rank_dict.get(t, 999) <= HOLD_RANK_LIMIT:
-                    target_portfolio.append(t)
+        if rot_state.get('in_market'):
+            current_holdings = [h['ticker'] for h in rot_state.get('holdings', [])]
             
-            # 2. 빈자리 채우기: 방출된 종목이 있어 자리가 남는다면, 순수 1,2위 종목으로 채움
-            for t in absolute_top2:
-                if len(target_portfolio) >= TOP_N: break
-                if t not in target_portfolio:
-                    target_portfolio.append(t)
+            # 1. 1, 2위에 이미 포함된 보유 종목은 자동 유지
+            target_portfolio = [t for t in current_holdings if t in absolute_top2]
+            
+            # 2. 방출 후보 (보유 종목 중 1, 2위가 아닌 종목) - 점수 오름차순 정렬 (약한 놈부터 데스매치 출전)
+            vulnerable = sorted([t for t in current_holdings if t not in target_portfolio], key=lambda x: scores.get(x, -999))
+            
+            # 3. 도전자 (새로운 1, 2위) - 점수 내림차순 정렬 (강한 놈부터 데스매치 출전)
+            challengers = sorted([t for t in absolute_top2 if t not in current_holdings], key=lambda x: scores.get(x, -999), reverse=True)
+            
+            # 4. 1:1 데스매치 (강한 도전자 vs 약한 방어자)
+            for challenger in challengers:
+                if not vulnerable: break # 남은 방어자가 없으면 종료
+                weakest = vulnerable[0]
+                
+                # 도전자가 약한 방어자를 마진(5.0) 이상으로 이기면 자리 탈환
+                if scores.get(challenger, -999) >= scores.get(weakest, -999) + SCORE_MARGIN:
+                    target_portfolio.append(challenger)
+                    vulnerable.pop(0) # 방어자 탈락
+                    
+            # 5. 살아남은 방어자들은 다시 포트폴리오로 복귀
+            target_portfolio.extend(vulnerable)
+            target_portfolio = target_portfolio[:TOP_N] # 초과 방어
+            
         else:
-            # 시장 진입 시에는 무조건 순수 모멘텀 1, 2위 매수
             target_portfolio = absolute_top2
+
+        # 💡 [버그 1 방어] 예수금 부족 등으로 target_portfolio가 비어버려 전량 매도되는 사고 방지
+        if not target_portfolio and rot_state.get('in_market'):
+            target_portfolio = [h['ticker'] for h in rot_state.get('holdings', [])]
 
         regime_ok = (spy_6m > 0 and vix_now < 25)
         
-        if rot_state['in_market']:
-            # 실제 보유 종목과 목표 포트폴리오(target_portfolio)가 다를 때만 ROTATE(교체) 지시
-            action = "EXIT" if not regime_ok else ("ROTATE" if set(target_portfolio) != set([h['ticker'] for h in rot_state['holdings']]) else "KEEP")
+        if rot_state.get('in_market'):
+            action = "EXIT" if not regime_ok else ("ROTATE" if set(target_portfolio) != set([h['ticker'] for h in rot_state.get('holdings', [])]) else "KEEP")
         else: 
             action = "ENTER" if regime_ok else "WAIT"
             
         return {"action": action, "top2": target_portfolio, "scores": scores, "vix_now": vix_now, "spy_6m": spy_6m}
-    except: 
+    except Exception as e: 
+        print(f"Signal Error: {e}")
         return {"action": "WAIT", "top2": [], "scores": {}, "vix_now": 0, "spy_6m": 0}
-
 
 # ==============================================================
 # 4. 성과 분석 함수
@@ -338,7 +348,6 @@ def calc_upro_performance(df):
     for v in eq_vals: 
         if v > peak: peak = v
         mdd = max(mdd, (peak - v) / peak * 100)
-    # 💡 [버그 3 수정] 샤프지수 trades < 3 시 계산 보호 로직 적용
     return {"total_return": round(equity - 100, 2), "win_rate": round(len(wins)/len(trades)*100, 1), "mdd": round(mdd, 2), "sharpe": round(np.mean(trades)/(np.std(trades)+1e-9)*np.sqrt(12), 2) if len(trades) >= 3 else 0.0, "total_trades": len(trades), "equity_curve": equity_curve}
 
 def calc_rotation_performance(df):
@@ -352,7 +361,6 @@ def calc_rotation_performance(df):
     for v in eq_vals:
         if v > peak: peak = v
         mdd = max(mdd, (peak - v) / peak * 100)
-    # 💡 [버그 3 수정] 샤프지수 에러 보호
     return {"total_return": round(equity - 100, 2), "win_rate": round(len(wins)/len(rets)*100, 1) if rets else 0.0, "mdd": round(mdd, 2), "sharpe": round(np.mean(rets)/(np.std(rets)+1e-9)*np.sqrt(12), 2) if len(rets) >= 3 else 0.0, "total_trades": len(rets), "equity_curve": equity_curve}
 
 # ==============================================================
@@ -396,7 +404,7 @@ def get_cached_portfolio_equity():
     trader = KIS_Trader()
     bal = trader.get_balance()
     rot_state = load_rotation_state()
-    upro_qty = max(trader.get_holdings(TRADE_TICKER), 0) # -1 에러 시 0으로 산정
+    upro_qty = max(trader.get_holdings(TRADE_TICKER), 0)
     cur_p_upro = trader.get_current_price(TRADE_TICKER)
     upro_value = upro_qty * cur_p_upro
     rot_value = sum(max(trader.get_holdings(h['ticker']), 0) * trader.get_current_price(h['ticker']) for h in rot_state.get('holdings', []))
@@ -418,10 +426,10 @@ async def run_trading():
         
     rot_state = load_rotation_state()
     bal = trader.get_balance()
-    upro_qty = trader.get_holdings(TRADE_TICKER)
+    upro_qty = max(trader.get_holdings(TRADE_TICKER), 0)
     cur_p_upro = trader.get_current_price(TRADE_TICKER)
     
-    upro_value = max(upro_qty, 0) * cur_p_upro
+    upro_value = upro_qty * cur_p_upro
     rot_value = sum(max(trader.get_holdings(h['ticker']), 0) * trader.get_current_price(h['ticker']) for h in rot_state.get('holdings', []))
     total_equity = bal + upro_value + rot_value
     per_stock_budget = (total_equity * ROTATION_RATIO * 0.95) / TOP_N
@@ -429,12 +437,11 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20, 4]:
+    if current_hour in [20, 21]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.6.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.6.3 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         
-        # UPRO 로직
         if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
             if cur_p_upro > 0:  
                 qty = int((upro_gap * 0.95) / cur_p_upro)
@@ -450,7 +457,6 @@ async def run_trading():
                 with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
                 pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
-        # ROT 로직
         action, top2 = r_sig['action'], r_sig['top2']
         if action in ["ENTER", "ROTATE"] and top2:
             new_h = []
@@ -469,11 +475,10 @@ async def run_trading():
                     else:
                         new_h.append(h)
                         retained_tickers.append(h['ticker'])
-                elif q == -1: # 💡 [버그 1 수정] KIS 조회 에러 시 포지션 유지
+                elif q == -1:
                     msgs.append(f"⚠️ ROT {h['ticker']} 조회 오류로 상태 유지")
                     new_h.append(h)
-                    if h['ticker'] in top2: retained_tickers.append(h['ticker']) # 중복 매수 방지
-                # 💡 q == 0 인 경우는 진짜 잔고 0이므로 new_h에 넣지 않고 자연스레 삭제!
+                    if h['ticker'] in top2: retained_tickers.append(h['ticker'])
                         
             time.sleep(2)
             
@@ -508,7 +513,7 @@ async def run_trading():
                         pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                     else:
                         remaining.append(h)
-                elif q == -1: # 💡 [버그 1 수정] 에러 시 보존
+                elif q == -1: 
                     remaining.append(h)
             
             rot_state.update({"in_market": len(remaining) > 0, "holdings": remaining})
@@ -517,7 +522,7 @@ async def run_trading():
             
         msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "\n".join(msgs))
 
-    elif current_hour in [1, 2]:
+    elif current_hour in [1, 2, 3, 4, 5]:
         spy_int = _yf_download_with_retry(SIGNAL_TICKER, period='5d', interval='5m')
         if not spy_int.empty:
             if isinstance(spy_int.columns, pd.MultiIndex):
@@ -544,7 +549,7 @@ async def run_trading():
                                     pd.DataFrame([{"Date": dt.now().strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_h, "Price": cp_h, "RetPct": round(ret_h, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                                 else:
                                     rem.append(h)
-                            elif q_h == -1: # 💡 [버그 1 수정] 에러 시 보존
+                            elif q_h == -1:
                                 rem.append(h)
                                 
                         rot_state.update({"in_market": len(rem) > 0, "holdings": rem})
@@ -579,7 +584,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     return fig
 
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.6.1", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.6.3", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
@@ -609,7 +614,6 @@ def run_dashboard():
         fig.update_layout(xaxis_rangeslider_visible=False, height=650, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
         if r_sig.get('scores'):
-            # 💡 [버그 4 수정] Dashboard 화면이 100개로 꽉 차지 않도록 상위 30개만 잘라서 출력
             st.subheader(f"모멘텀 랭킹 (상위 30개 / 필터: ${actual_per_stock_budget:.1f} 이하)")
             sc_df = pd.DataFrame([{"Ticker": t, "Score": s, "Rank": "★" if t in r_sig['top2'] else ""} for t, s in sorted(r_sig['scores'].items(), key=lambda x: x[1], reverse=True)[:30]])
             st.dataframe(sc_df, use_container_width=True, hide_index=True)
