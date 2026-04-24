@@ -1,5 +1,5 @@
 """
-Unified Trading Bot v1.4.2
+Unified Trading Bot v1.5.0
 [Update] Dashboard: Added SPY Benchmark (Buy & Hold) overlay to performance charts.
 [Base] v1.4.1 Hotfix (Syntax Error Fixed, Golden Recipe 50:50, Fast Cache)
 """
