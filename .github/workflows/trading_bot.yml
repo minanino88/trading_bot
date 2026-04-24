@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy yfinance requests pytz python-telegram-bot streamlit plotly
+          pip install pandas numpy yfinance requests pytz python-telegram-bot streamlit plotly lxml
 
       - name: Run Trading Bot
         env:
