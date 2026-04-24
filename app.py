@@ -312,8 +312,8 @@ def ask_gemini(u_sig, r_sig):
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
     
-    # 1차 시도: 1.5 Flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # 가장 최신/안정적인 이름인 2.0-flash로 우선 찔러봅니다
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
     
@@ -321,19 +321,14 @@ def ask_gemini(u_sig, r_sig):
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        elif res.status_code == 404:
-            # 2차 시도: 1.5가 404 에러를 뱉으면 1.0 Pro 모델로 자동 우회!
-            url_fb = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-            res_fb = requests.post(url_fb, headers=headers, json=payload, timeout=10)
-            if res_fb.status_code == 200:
-                return res_fb.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            return "AI 모델 404 (구글 API 키 재발급 권장)"
-        elif res.status_code == 429:
-            return "AI 무료 사용량 초과 (429)"
         else:
+            # 🔥 핵심: 구글 서버가 뱉는 "진짜 에러 원문"을 깃허브 터미널 로그에 100% 출력
+            print(f"🚨 [AI 에러 원본] 상태코드: {res.status_code}, 내용: {res.text}")
             return f"AI 연결 지연 ({res.status_code})"
-    except: 
+    except Exception as e: 
+        print(f"🚨 [AI 통신 에러] {e}")
         return "AI 연결 실패"
+
 
 
 
