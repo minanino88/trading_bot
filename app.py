@@ -67,10 +67,10 @@ class KIS_Trader:
     def _headers(self, tr_id):
         return {"Content-Type": "application/json", "authorization": f"Bearer {self.token}", "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id, "custtype": "P"}
 
-    def get_balance(self):
+        def get_balance(self):
         try:
-            # ✅ '매수가능금액' 묻는 멍청한 API 버리고, '계좌 달러 예수금 총액'을 직접 묻습니다.
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+            # 클로드 조언 반영: 특정 거래소(AMEX) 대신 보통 전체가 조회되는 NASD 사용
             params = {
                 "CANO": self.cano, 
                 "ACNT_PRDT_CD": self.acnt_prdt_cd, 
@@ -81,22 +81,50 @@ class KIS_Trader:
             }
             res = requests.get(url, headers=self._headers("JTTT3012R"), params=params).json()
             
-            # output2의 'frcr_dncl_amt2'가 실제 외화(달러) 예수금 총액입니다.
-            usd_cash = float(res.get('output2', {}).get('frcr_dncl_amt2', 0))
+            # 🔥 핵심: 한투가 보내주는 원본 데이터를 깃허브 로그에 100% 출력합니다.
+            import json
+            print(f"📊 잔고 RAW 응답: {json.dumps(res, ensure_ascii=False)}")
+            
+            # 클로드 조언 반영: 리스트/딕셔너리 형태 모두 방어 및 다양한 필드명 체크
+            out2 = res.get('output2', {})
+            if isinstance(out2, list):
+                out2 = out2[0] if len(out2) > 0 else {}
+                
+            usd_cash = float(out2.get('frcr_dncl_amt2', out2.get('frcr_dncl_amt_2', out2.get('frcr_evlu_amt2', 0))))
             return usd_cash
         except Exception as e:
-            print(f"🚨 KIS 시스템 에러: {e}")
+            print(f"🚨 KIS 잔고 시스템 에러: {e}")
             return 0.0
 
     def get_holdings(self, ticker):
         try:
+            import json
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-            params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": "AMEX", "TR_CRCY_CD": "USD", "CTX_AREA_FK200": "", "CTX_AREA_NK200": ""}
+            params = {
+                "CANO": self.cano, 
+                "ACNT_PRDT_CD": self.acnt_prdt_cd, 
+                "OVRS_EXCG_CD": "NYS",  # UPRO/SPY는 NYSE Arca
+                "TR_CRCY_CD": "USD", 
+                "CTX_AREA_FK200": "", 
+                "CTX_AREA_NK200": ""
+            }
             res = requests.get(url, headers=self._headers("JTTT3012R"), params=params).json()
+            
+            # 📦 만약 못 찾으면 깃허브 로그에 KIS 원본 데이터를 다 찍어버립니다.
+            print(f"📦 {ticker} 보유종목 RAW: {json.dumps(res.get('output1', []), ensure_ascii=False)}")
+            
             for item in res.get('output1', []):
-                if item.get('pdno') == ticker: return int(float(item.get('ccld_qty_smtl', 0)))
+                # 종목 코드가 맞는지 확인 (pdno 또는 ovrs_pdno)
+                if item.get('pdno') == ticker or item.get('ovrs_pdno') == ticker or item.get('ovrs_item_no') == ticker:
+                    # ✅ 클로드 수정: 오늘 체결량이 아닌 '실제 잔고 수량'을 가져옴
+                    qty = int(float(item.get('ovrs_cblc_qty', item.get('ccld_qty_smtl', 0))))
+                    print(f"✅ {ticker} 실제 보유수량 확인됨: {qty}")
+                    return qty
             return 0
-        except: return 0
+        except Exception as e: 
+            print(f"🚨 KIS 보유종목 에러: {e}")
+            return 0
+
 
     def get_current_price(self, ticker):
         try:
