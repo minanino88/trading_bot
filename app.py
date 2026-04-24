@@ -117,7 +117,7 @@ class KIS_Trader:
             return 0
 
 
-        def get_current_price(self, ticker):
+    def get_current_price(self, ticker):
         # 1차: 야후 파이낸스 (가장 확실한 5일치 일봉 데이터에서 마지막 종가 추출)
         try:
             import yfinance as yf
