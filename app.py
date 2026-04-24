@@ -119,26 +119,24 @@ class KIS_Trader:
 
     def get_current_price(self, ticker):
         try:
-            # 해외주식 현재가 체결가 조회 (TR_ID: HHDFS76410100)
+            # 1차: 한투 API (UPRO/SPY는 AMS, 나머지는 NAS로 찌름)
             url = f"{self.base_url}/uapi/overseas-stock/v1/quotations/price"
-            # 종목코드 앞에 시장 구분(나스닥 NASD, 아멕스 AMEX 등)을 붙여야 할 수도 있음
-            # 단순 조회를 위해 기본 포맷 사용
-            params = {
-                "AUTH": "",
-                "EXCD": "NAS" if ticker not in ["UPRO", "SPY"] else "AMS",
-                "SYMB": ticker
-            }
+            excd = "AMS" if ticker in ["UPRO", "SPY"] else "NAS"
+            params = {"AUTH": "", "EXCD": excd, "SYMB": ticker}
             res = requests.get(url, headers=self._headers("HHDFS76410100"), params=params).json()
             price = float(res.get('output', {}).get('last', 0))
             
-            # 만약 한투 API가 일시적으로 실패할 경우를 대비한 2중 방어 (yfinance)
+            # 2차: 한투가 0원을 주면 야후 파이낸스로 우회 (절대 에러 안 나는 fast_info 사용)
             if price == 0:
-                df = yf.download(ticker, period='1d', interval='1m', progress=False)
-                price = float(df['Close'].iloc[-1])
+                import yfinance as yf
+                price = float(yf.Ticker(ticker).fast_info['lastPrice'])
+                print(f"💲 {ticker} 야후파이낸스 현재가 우회 성공: {price}")
                 
             return price
-        except:
+        except Exception as e:
+            print(f"🚨 {ticker} 현재가 조회 에러: {e}")
             return 0.0
+
 
 
     def send_order(self, ticker, qty, side="BUY"):
@@ -300,8 +298,8 @@ def ask_gemini(u_sig, r_sig):
     if not api_key: return "API 키 없음"
     prompt = f"퀀트 전문가로서 분석해줘. UPRO={u_sig}, ROT={r_sig.get('action') if isinstance(r_sig, dict) else r_sig}. 한국어 150자."
     
-    # ✅ 가장 범용적인 1.5-flash 모델로 고정
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # ✅ 클로드 제안대로 다시 최신 2.0 모델로 복귀
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {'Content-Type': 'application/json'}
     
@@ -310,9 +308,10 @@ def ask_gemini(u_sig, r_sig):
         if res.status_code == 200:
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         else:
-            return f"AI 거절 (코드: {res.status_code})"
+            return f"AI 지연 ({res.status_code})"
     except: 
         return "AI 연결 실패"
+
 
 
 async def tg_send(token_v, chat_id, text):
@@ -408,12 +407,27 @@ async def run_trading():
                     cp = trader.get_current_price(h['ticker']); ret = (cp - h.get('entry_price', cp)) / max(h.get('entry_price', cp), 1) * 100
                     pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": cp, "RetPct": round(ret, 2)}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
             time.sleep(2); new_h = []
+                        # 신규 종목 매수 로직
             for t in top2:
-                p = trader.get_current_price(t); qty = int(((rot_target * 0.95) / len(top2)) / p) if p > 0 else 0
-                if qty >= 1 and trader.send_order(t, qty, "BUY").get('rt_cd') == '0':
-                    new_h.append({"ticker": t, "qty": qty, "entry_price": p})
-                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-            rot_state.update({"in_market": True, "holdings": new_h}); save_rotation_state(rot_state); msgs.append(f"🔄 ROT 교체: {', '.join(top2)}")
+                p = trader.get_current_price(t)
+                qty = int(((rot_target * 0.95) / len(top2)) / p) if p > 0 else 0
+                
+                # 수량이 1주 이상 계산되었을 때만 실제 주문(send_order) 발송
+                if qty >= 1:
+                    order_res = trader.send_order(t, qty, "BUY")
+                    if order_res.get('rt_cd') == '0':
+                        new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                        msgs.append(f"✅ ROT 매수 성공: {t} {qty}주")
+                    else:
+                        msgs.append(f"❌ ROT {t} 주문 실패: {order_res.get('msg1')}")
+                else:
+                    msgs.append(f"⚠️ ROT {t} 매수 보류 (현재가 0원 또는 자금 부족)")
+            
+            # 진짜로 매수한 종목이 있을 때만 상태 저장
+            rot_state.update({"in_market": True, "holdings": new_h})
+            save_rotation_state(rot_state)
+
         elif action == "EXIT" and rot_state.get('in_market'):
             for h in rot_state.get('holdings', []):
                 q = trader.get_holdings(h['ticker'])
