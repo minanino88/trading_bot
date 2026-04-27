@@ -649,7 +649,7 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20, 21]:
+    if current_hour in [20, 21,22,23,0]:
         upro_target = total_equity * upro_ratio
         rot_target = total_equity * rot_ratio
         
