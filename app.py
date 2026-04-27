@@ -781,11 +781,12 @@ async def run_trading():
             else:
                 spy_today = spy_int[spy_int.index.date == today_us]
                 
-            spy_check = spy_today if len(spy_today) >= 5 else spy_int
-            
-            if not spy_check.empty:
-                drop_ratio = (float(spy_check['Close'].iloc[-1]) / float(spy_check['Open'].iloc[0])) - 1
+            # 💡 [여기서부터 수정된 부분입니다]
+            if len(spy_today) >= 5:
+                drop_ratio = (float(spy_today['Close'].iloc[-1]) / float(spy_today['Open'].iloc[0])) - 1
                 if drop_ratio <= -0.03:
+                    
+                    # 1. UPRO 긴급 매도
                     if upro_qty > 0:
                         order_res = trader.send_order(TRADE_TICKER, upro_qty, "SELL")
                         if order_res.get('rt_cd') == '0':
@@ -794,7 +795,8 @@ async def run_trading():
                             pd.DataFrame(hist_data).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
                             with open(STATE_FILE, 'w') as f:
                                 json.dump({"in_market": False, "last_exit_price": exit_p}, f)
-                        
+                    
+                    # 2. ROT 긴급 매도 (UPRO와 동일한 층위에서 실행)
                     if rot_state.get('in_market'):
                         rem = []
                         for h in rot_state.get('holdings', []):
@@ -814,7 +816,12 @@ async def run_trading():
                         rot_state.update({"in_market": len(rem) > 0, "holdings": rem})
                         save_rotation_state(rot_state)
                         
+                    # 3. 텔레그램 알림
                     await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
+                    
+            else:
+                # 당일 5분봉 데이터가 5개 미만일 때 5일치 폴백을 막고 스킵합니다.
+                print("⚠️ 당일 5분봉 데이터 부족으로 긴급탈출 감지 스킵")
 
     elif current_hour in [7, 8]:
         bal_7 = trader.get_balance()
