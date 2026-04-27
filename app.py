@@ -1,14 +1,7 @@
 """
-Unified Trading Bot v1.7.0 (Absolute Masterpiece)
-[Update] 가장 우아하고 수학적으로 완벽한 Score Buffer 로직 적용 (어드밴티지 점수 부여 방식)
-[Fix] KIS 잔고 조회 에러(-1)와 실제 잔고 없음(0) 분리 → q==0 고스트 포지션 완벽 차단
-[Fix] Nasdaq 100 전체 종목 풀 복구 (.head(30) 제거) + 20개씩 배치 조회로 타임아웃 방어
-[Fix] spy_close_col.iloc[:, 0] 적용으로 squeeze() 데이터 1행 스칼라 변환 에러 보호
-[Fix] 성과 분석 시 거래 횟수 3회 미만(trades < 3)일 때 샤프지수 에러 보호
-[Fix] 긴급탈출 & ROT EXIT 로직 시 매도/조회 실패 종목 안전 잔류 처리
-[Fix] 예산 부족으로 인한 빈 포트폴리오(전량매도) 엣지케이스 완벽 방어
-[Fix] ★ (v1.6.5) UPRO 잔고 조회 실패(-1) 시 비중 채우기 착각에 의한 '중복 폭풍매수' 원천 차단
-[Fix] ★ (v1.6.5) 보유 종목이 폭등하여 1주당 예산을 초과했을 때 '주도주 강제 탈락/매도'되는 버그 해결
+Unified Trading Bot v1.7.1 (Masterpiece + VIX Dynamic Allocation)
+[Update] v1.6.5의 VIX 기반 동적 비중 조절 로직 복구 및 완벽 이식
+[Base] v1.7.0 structure (Score Buffer, 고스트 포지션 차단, Nasdaq 전체 풀 복구 등 8가지 핵심 방어 완벽 유지)
 """
 
 import os
@@ -34,11 +27,9 @@ except ImportError:
 warnings.filterwarnings('ignore')
 
 # ==============================================================
-# 1. 설정 (황금 레시피 유지: 50대 50)
+# 1. 설정
 # ==============================================================
 KST = pytz.timezone('Asia/Seoul')
-UPRO_RATIO     = 0.50
-ROTATION_RATIO = 0.50
 SIGNAL_TICKER = 'SPY'
 TRADE_TICKER  = 'UPRO'
 STATE_FILE    = 'trend_state.json'
@@ -54,6 +45,14 @@ VIX_ENTER_MAX         = 25.0
 SPY_6M_MIN            = 0.0
 ROTATION_STATE_FILE   = 'rotation_state.json'
 ROTATION_HISTORY_FILE = 'history_rotation.csv'
+
+# 💡 [v1.7.1 복구] VIX 기반 동적 비중 계산 함수
+def get_dynamic_upro_ratio(vix_now):
+    if vix_now < 15:   return 0.65
+    elif vix_now < 20: return 0.55
+    elif vix_now < 25: return 0.45
+    elif vix_now < 30: return 0.30
+    else:              return 0.15
 
 # ==============================================================
 # 2. KIS API 
@@ -279,8 +278,6 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
             
         scores = {t: calc_mom(series) for t, series in close_all.items()}
         
-        # 💡 [버그 2 해결] "주도주 강제 탈락" 방어 로직
-        # 이미 들고 있는 종목은 가격이 올라도 예산 제한 검사(per_stock_budget)에서 프리패스(면제)
         current_holdings_pre = [h['ticker'] for h in rot_state.get('holdings', [])] if rot_state.get('in_market') else []
         eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget or t in current_holdings_pre}
         
@@ -412,7 +409,6 @@ async def run_trading():
     rot_state = load_rotation_state()
     bal = trader.get_balance()
     
-    # 💡 [버그 1 해결] UPRO 통신 장애(-1) 파악을 위해 원본 변수 분리
     upro_raw_qty = trader.get_holdings(TRADE_TICKER)
     upro_qty = max(upro_raw_qty, 0)
     cur_p_upro = trader.get_current_price(TRADE_TICKER)
@@ -420,17 +416,26 @@ async def run_trading():
     upro_value = upro_qty * cur_p_upro
     rot_value = sum(max(trader.get_holdings(h['ticker']), 0) * trader.get_current_price(h['ticker']) for h in rot_state.get('holdings', []))
     total_equity = bal + upro_value + rot_value
-    per_stock_budget = (total_equity * ROTATION_RATIO * 0.95) / TOP_N
+    
+    # 💡 [v1.7.1 수정] VIX 동적 비중 100% 적용 완료
+    vix_now = float(vix_close.iloc[-1])
+    upro_ratio = get_dynamic_upro_ratio(vix_now)
+    rot_ratio = 1.0 - upro_ratio
+    
+    per_stock_budget = (total_equity * rot_ratio * 0.95) / TOP_N
     
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
     if current_hour in [20, 21]:
-        upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.6.5 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        # 💡 [v1.7.1 수정] 고정된 UPRO_RATIO 대신 계산된 동적 upro_ratio 사용!
+        upro_target, rot_target = total_equity * upro_ratio, total_equity * rot_ratio
+        msgs = [f"🤖 <b>통합봇 v1.7.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
+                f"총자산: ${total_equity:,.2f}",
+                f"📊 비중: UPRO {upro_ratio*100:.0f}% | ROT {rot_ratio*100:.0f}% (VIX: {vix_now:.1f})"]
+        
         upro_gap = max(0, upro_target - upro_value)
         
-        # 💡 [버그 1 해결] KIS 에러로 인한 UPRO 중복 매수 원천 차단
         if upro_raw_qty == -1:
             msgs.append("⚠️ UPRO 잔고 조회 통신 에러: 중복 매수 방지를 위해 이번 턴 UPRO 매매 스킵")
         else:
@@ -513,7 +518,8 @@ async def run_trading():
             save_rotation_state(rot_state)
             msgs.append("🚨 ROT 하락장 청산 시도")
             
-        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "\n".join(msgs))
+        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "
+".join(msgs))
 
     elif current_hour in [1, 2, 3, 4, 5]:
         spy_int = _yf_download_with_retry(SIGNAL_TICKER, period='5d', interval='5m')
@@ -550,11 +556,15 @@ async def run_trading():
                     await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
 
     elif current_hour in [7, 8]:
-        bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>\n잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%\n🧠 {ask_gemini('morning', r_sig)}"
+        bal_7 = trader.get_balance(); msg = f"📋 <b>아침 리포트</b>
+잔고: ${bal_7:,.2f} | SPY 6M: {r_sig['spy_6m']*100:+.1f}%
+🧠 {ask_gemini('morning', r_sig)}"
         await tg_send(token_v, chat_id, msg)
     
     else:
-        await tg_send(token_v, chat_id, f"🧪 <b>수동 테스트</b>\nUPRO: {u_sig} | ROT: {r_sig['action']}\nTOP2: {', '.join(r_sig['top2'])}")
+        await tg_send(token_v, chat_id, f"🧪 <b>수동 테스트</b>
+UPRO: {u_sig} | ROT: {r_sig['action']}
+TOP2: {', '.join(r_sig['top2'])}")
 
 # ==============================================================
 # 10. Dashboard
@@ -577,12 +587,18 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     return fig
 
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.6.5", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.7.1", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
-    actual_per_stock_budget = (total_equity * ROTATION_RATIO * 0.95) / TOP_N if total_equity > 10 else 99999
+    
+    # 💡 [v1.7.1 수정] 대시보드 동적 비중 반영
+    vix_now = float(vix_close.iloc[-1])
+    upro_ratio = get_dynamic_upro_ratio(vix_now)
+    rot_ratio = 1.0 - upro_ratio
+    
+    actual_per_stock_budget = (total_equity * rot_ratio * 0.95) / TOP_N if total_equity > 10 else 99999
     
     rot_state = load_rotation_state()
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
@@ -591,6 +607,8 @@ def run_dashboard():
     df_upro = pd.read_csv(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else pd.DataFrame()
     df_rot = pd.read_csv(ROTATION_HISTORY_FILE) if os.path.exists(ROTATION_HISTORY_FILE) else pd.DataFrame()
     upro_perf = calc_upro_performance(df_upro); rot_perf = calc_rotation_performance(df_rot)
+
+    st.write(f"### 🎯 현재 목표 비중: UPRO {upro_ratio*100:.0f}% : ROT {rot_ratio*100:.0f}%")
 
     tab1, tab2, tab3 = st.tabs(["📡 실시간 현황", "📊 성과 분석", "📋 거래 로그"])
     with tab1:
