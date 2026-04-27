@@ -518,8 +518,10 @@ async def run_trading():
             save_rotation_state(rot_state)
             msgs.append("🚨 ROT 하락장 청산 시도")
             
-        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}"); await tg_send(token_v, chat_id, "
-".join(msgs))
+        msgs.append(f"🧠 AI: {ask_gemini(u_sig, r_sig)}")
+        final_msg = "\n".join(msgs)
+        await tg_send(token_v, chat_id, final_msg)
+
 
     elif current_hour in [1, 2, 3, 4, 5]:
         spy_int = _yf_download_with_retry(SIGNAL_TICKER, period='5d', interval='5m')
