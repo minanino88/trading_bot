@@ -1,5 +1,5 @@
 """
-Unified Trading Bot v1.6.4 (Absolute Masterpiece)
+Unified Trading Bot v1.7.0 (Absolute Masterpiece)
 [Update] 가장 우아하고 수학적으로 완벽한 Score Buffer 로직 적용 (어드밴티지 점수 부여 방식)
 [Fix] KIS 잔고 조회 에러(-1)와 실제 잔고 없음(0) 분리 → q==0 고스트 포지션 완벽 차단
 [Fix] Nasdaq 100 전체 종목 풀 복구 (.head(30) 제거) + 20개씩 배치 조회로 타임아웃 방어
@@ -7,6 +7,8 @@ Unified Trading Bot v1.6.4 (Absolute Masterpiece)
 [Fix] 성과 분석 시 거래 횟수 3회 미만(trades < 3)일 때 샤프지수 에러 보호
 [Fix] 긴급탈출 & ROT EXIT 로직 시 매도/조회 실패 종목 안전 잔류 처리
 [Fix] 예산 부족으로 인한 빈 포트폴리오(전량매도) 엣지케이스 완벽 방어
+[Fix] ★ (v1.6.5) UPRO 잔고 조회 실패(-1) 시 비중 채우기 착각에 의한 '중복 폭풍매수' 원천 차단
+[Fix] ★ (v1.6.5) 보유 종목이 폭등하여 1주당 예산을 초과했을 때 '주도주 강제 탈락/매도'되는 버그 해결
 """
 
 import os
@@ -276,31 +278,29 @@ def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_bu
             return round(m1*0.4 + m3*0.4 + m6*0.2, 2)
             
         scores = {t: calc_mom(series) for t, series in close_all.items()}
-        eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget}
+        
+        # 💡 [버그 2 해결] "주도주 강제 탈락" 방어 로직
+        # 이미 들고 있는 종목은 가격이 올라도 예산 제한 검사(per_stock_budget)에서 프리패스(면제)
+        current_holdings_pre = [h['ticker'] for h in rot_state.get('holdings', [])] if rot_state.get('in_market') else []
+        eligible = {t: sc for t, sc in scores.items() if close_all[t].iloc[-1] <= per_stock_budget or t in current_holdings_pre}
         
         SCORE_MARGIN = 5.0
         
         if rot_state.get('in_market'):
-            current_holdings = [h['ticker'] for h in rot_state.get('holdings', [])]
-            
-            # 💡 [진짜 완벽한 Score Buffer 로직: 어드밴티지 점수 부여 방식]
             adjusted_scores = {}
             for t in eligible.keys():
                 base_score = scores.get(t, -999)
-                if t in current_holdings:
-                    adjusted_scores[t] = base_score + SCORE_MARGIN # 보유 종목에게만 방어력 +5.0 부여
+                if t in current_holdings_pre:
+                    adjusted_scores[t] = base_score + SCORE_MARGIN 
                 else:
                     adjusted_scores[t] = base_score
                     
-            # 버프가 적용된 점수로 전체 줄을 다시 세워서 깔끔하게 상위 N개 선발
             eligible_sorted = sorted(eligible.items(), key=lambda x: adjusted_scores.get(x[0], -999), reverse=True)
             target_portfolio = [t for t, _ in eligible_sorted[:TOP_N]]
-            
         else:
             eligible_sorted = sorted(eligible.items(), key=lambda x: x[1], reverse=True)
             target_portfolio = [t for t, _ in eligible_sorted[:TOP_N]]
 
-        # 💡 [주의 1 완벽 방어] 예산 부족 등으로 target_portfolio가 비어버려 전량 매도되는 엣지 케이스 방어
         if not target_portfolio and rot_state.get('in_market'):
             target_portfolio = [h['ticker'] for h in rot_state.get('holdings', [])]
 
@@ -411,7 +411,10 @@ async def run_trading():
         
     rot_state = load_rotation_state()
     bal = trader.get_balance()
-    upro_qty = max(trader.get_holdings(TRADE_TICKER), 0)
+    
+    # 💡 [버그 1 해결] UPRO 통신 장애(-1) 파악을 위해 원본 변수 분리
+    upro_raw_qty = trader.get_holdings(TRADE_TICKER)
+    upro_qty = max(upro_raw_qty, 0)
     cur_p_upro = trader.get_current_price(TRADE_TICKER)
     
     upro_value = upro_qty * cur_p_upro
@@ -424,24 +427,27 @@ async def run_trading():
 
     if current_hour in [20, 21]:
         upro_target, rot_target = total_equity * UPRO_RATIO, total_equity * ROTATION_RATIO
-        msgs = [f"🤖 <b>통합봇 v1.6.4 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
+        msgs = [f"🤖 <b>통합봇 v1.6.5 [{now_kst.strftime('%m/%d %H:%M')}]</b>", f"총자산: ${total_equity:,.2f}"]
         upro_gap = max(0, upro_target - upro_value)
         
-        # UPRO 로직
-        if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
-            if cur_p_upro > 0:  
-                qty = int((upro_gap * 0.95) / cur_p_upro)
-                if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
-                    msgs.append(f"✅ UPRO 매수: {qty}주")
-                    with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
-                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
-            else:
-                msgs.append("⚠️ UPRO 현재가 수신 실패(0.0)로 매수 보류")
-        elif u_sig == "EXIT" and upro_qty > 0:
-            if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
-                msgs.append(f"✅ UPRO 매도: {upro_qty}주")
-                with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
-                pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+        # 💡 [버그 1 해결] KIS 에러로 인한 UPRO 중복 매수 원천 차단
+        if upro_raw_qty == -1:
+            msgs.append("⚠️ UPRO 잔고 조회 통신 에러: 중복 매수 방지를 위해 이번 턴 UPRO 매매 스킵")
+        else:
+            if u_sig in ["KEEP", "RE-ENTER"] and upro_gap > (upro_target * 0.1):
+                if cur_p_upro > 0:  
+                    qty = int((upro_gap * 0.95) / cur_p_upro)
+                    if qty >= 1 and trader.send_order(TRADE_TICKER, qty, "BUY").get('rt_cd') == '0':
+                        msgs.append(f"✅ UPRO 매수: {qty}주")
+                        with open(STATE_FILE, 'w') as f: json.dump({"in_market": True, "last_exit_price": 0}, f)
+                        pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Qty": qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+                else:
+                    msgs.append("⚠️ UPRO 현재가 수신 실패(0.0)로 매수 보류")
+            elif u_sig == "EXIT" and upro_qty > 0:
+                if trader.send_order(TRADE_TICKER, upro_qty, "SELL").get('rt_cd') == '0':
+                    msgs.append(f"✅ UPRO 매도: {upro_qty}주")
+                    with open(STATE_FILE, 'w') as f: json.dump({"in_market": False, "last_exit_price": u_p}, f)
+                    pd.DataFrame([{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
         
         # ROT 로직
         action, top2 = r_sig['action'], r_sig['top2']
@@ -571,7 +577,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
     return fig
 
 def run_dashboard():
-    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.6.4", layout="wide")
+    now_kst = dt.now(KST); st.set_page_config(page_title="Unified Bot v1.6.5", layout="wide")
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty: st.error(f"데이터 실패: {data_msg}"); return
 
