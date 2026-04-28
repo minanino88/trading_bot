@@ -823,7 +823,7 @@ async def run_trading():
                 # 당일 5분봉 데이터가 5개 미만일 때 5일치 폴백을 막고 스킵합니다.
                 print("⚠️ 당일 5분봉 데이터 부족으로 긴급탈출 감지 스킵")
 
-    elif current_hour in [7, 8]:
+    elif current_hour in [7, 8, 9, 10]:
         bal_7 = trader.get_balance()
         report_msg = [
             "📋 <b>아침 리포트</b>",
