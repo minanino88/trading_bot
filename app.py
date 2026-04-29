@@ -1022,5 +1022,3 @@ if __name__ == "__main__":
         asyncio.run(run_trading())
     else:
         run_dashboard()
-
-```
