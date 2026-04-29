@@ -1,8 +1,7 @@
 """
-Unified Trading Bot v1.7.1 (Masterpiece + VIX Dynamic Allocation)
-[Update] v1.6.5의 VIX 기반 동적 비중 조절 로직 복구 및 완벽 이식
-[Base] v1.7.0 structure (Score Buffer, 고스트 포지션 차단, Nasdaq 전체 풀 복구 등 8가지 핵심 방어 완벽 유지)
-[Fix] 깃허브 에디터 SyntaxError(unterminated string literal) 방지를 위한 세미콜론 및 줄바꿈 완전 제거/분리
+Unified Trading Bot v1.7.3 (Masterpiece + Perfect Stop-loss)
+[Update] 클로드 코드 리뷰 반영: 손절 로직 실행 순서 버그 수정 및 고스트 포지션 방어 완벽 적용
+[Base] v1.7.1 structure (VIX Dynamic Allocation, KIS Robustness, Anti-SyntaxError formatting)
 """
 
 import os
@@ -47,7 +46,10 @@ SPY_6M_MIN            = 0.0
 ROTATION_STATE_FILE   = 'rotation_state.json'
 ROTATION_HISTORY_FILE = 'history_rotation.csv'
 
-# 💡 [v1.7.1 복구] VIX 기반 동적 비중 계산 함수
+# 💡 ROT 개별 종목 손절 기준 설정 (-10%)
+ROT_STOP_LOSS_THRESHOLD = -0.10
+
+# 💡 VIX 기반 동적 비중 계산 함수
 def get_dynamic_upro_ratio(vix_now):
     if vix_now < 15:
         return 0.65
@@ -649,12 +651,12 @@ async def run_trading():
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, per_stock_budget)
 
-    if current_hour in [20, 21,22,23,0]:
+    if current_hour in [20, 21, 22, 23, 0]:
         upro_target = total_equity * upro_ratio
         rot_target = total_equity * rot_ratio
         
         msgs = [
-            f"🤖 <b>통합봇 v1.7.1 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
+            f"🤖 <b>통합봇 v1.7.3 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
             f"총자산: ${total_equity:,.2f}",
             f"📊 비중: UPRO {upro_ratio*100:.0f}% | ROT {rot_ratio*100:.0f}% (VIX: {vix_now:.1f})"
         ]
@@ -691,13 +693,34 @@ async def run_trading():
         action = r_sig['action']
         top2 = r_sig['top2']
         
-        if action in ["ENTER", "ROTATE"] and top2:
+        # 💡 [v1.7.3] 1. 매수 분기점 정상화 (하락장 EXIT 무한루프 방지)
+        if action in ["ENTER", "ROTATE", "KEEP"]:
+            stop_lossed_tickers = []
             new_h = []
             retained_tickers = []
             
             for h in rot_state.get('holdings', []):
                 q = trader.get_holdings(h['ticker'])
                 if q > 0:
+                    curr_p = trader.get_current_price(h['ticker'])
+                    entry_p = h.get('entry_price', curr_p)
+                    
+                    perf = (curr_p - entry_p) / entry_p if entry_p > 0 else 0
+                    
+                    if perf <= ROT_STOP_LOSS_THRESHOLD:
+                        order_res = trader.send_order(h['ticker'], q, "SELL")
+                        if order_res.get('rt_cd') == '0':
+                            msgs.append(f"🛑 ROT 손절 실행: {h['ticker']} ({perf*100:.1f}%)")
+                            hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": curr_p, "RetPct": round(perf*100, 2)}]
+                            pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                            stop_lossed_tickers.append(h['ticker']) 
+                            continue
+                        else:
+                            # 💡 [v1.7.3] 2. 손절 주문 실패 시 고스트 포지션 방어 완벽 구현
+                            msgs.append(f"⚠️ 손절 주문 실패, 상태 유지: {h['ticker']}")
+                            new_h.append(h)
+                            continue
+                    
                     if h['ticker'] not in top2:
                         order_res = trader.send_order(h['ticker'], q, "SELL")
                         if order_res.get('rt_cd') == '0':
@@ -716,31 +739,38 @@ async def run_trading():
                     new_h.append(h)
                     if h['ticker'] in top2:
                         retained_tickers.append(h['ticker'])
-                        
+                            
             time.sleep(2)
             
-            for t in top2:
-                if t in retained_tickers:
-                    msgs.append(f"🔄 ROT 유지: {t} (추가 매수 생략)")
-                    continue
+            # 매수 루프는 ENTER나 ROTATE일 때, 또는 유지 중 빈자리가 생겼을 때만(단, 손절 종목 제외) 돕니다.
+            if action in ["ENTER", "ROTATE"] and top2:
+                for t in top2:
+                    if t in retained_tickers:
+                        msgs.append(f"🔄 ROT 유지: {t} (추가 매수 생략)")
+                        continue
                     
-                p = trader.get_current_price(t)
-                if p > 0:
-                    qty = int(((rot_target * 0.95) / len(top2)) / p)
-                else:
-                    qty = 0
-                    
-                if qty >= 1:
-                    order_res = trader.send_order(t, qty, "BUY")
-                    if order_res.get('rt_cd') == '0':
-                        new_h.append({"ticker": t, "qty": qty, "entry_price": p})
-                        hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]
-                        pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-                        msgs.append(f"✅ ROT 매수 성공: {t} {qty}주")
+                    if t in stop_lossed_tickers:
+                        msgs.append(f"🛡️ 손절 종목 재진입 방지: {t} (당일 현금 보존)")
+                        continue
+                        
+                    p = trader.get_current_price(t)
+                    if p > 0:
+                        # 💡 [v1.7.3] 3. 손절로 인한 슬롯 공백 발생 시 남은 예산을 채우지 않고 현금 유지 (의도된 동작)
+                        qty = int(((rot_target * 0.95) / len(top2)) / p)
                     else:
-                        msgs.append(f"❌ ROT {t} 주문 실패: {order_res.get('msg1')}")
-                else:
-                    msgs.append(f"⚠️ ROT {t} 매수 보류 (현재가 0원 또는 자금 부족)")
+                        qty = 0
+                        
+                    if qty >= 1:
+                        order_res = trader.send_order(t, qty, "BUY")
+                        if order_res.get('rt_cd') == '0':
+                            new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+                            hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]
+                            pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                            msgs.append(f"✅ ROT 매수 성공: {t} {qty}주")
+                        else:
+                            msgs.append(f"❌ ROT {t} 주문 실패: {order_res.get('msg1')}")
+                    else:
+                        msgs.append(f"⚠️ ROT {t} 매수 보류 (현재가 0원 또는 자금 부족)")
             
             rot_state.update({"in_market": True, "holdings": new_h})
             save_rotation_state(rot_state)
@@ -781,12 +811,10 @@ async def run_trading():
             else:
                 spy_today = spy_int[spy_int.index.date == today_us]
                 
-            # 💡 [여기서부터 수정된 부분입니다]
             if len(spy_today) >= 5:
                 drop_ratio = (float(spy_today['Close'].iloc[-1]) / float(spy_today['Open'].iloc[0])) - 1
                 if drop_ratio <= -0.03:
                     
-                    # 1. UPRO 긴급 매도
                     if upro_qty > 0:
                         order_res = trader.send_order(TRADE_TICKER, upro_qty, "SELL")
                         if order_res.get('rt_cd') == '0':
@@ -796,7 +824,6 @@ async def run_trading():
                             with open(STATE_FILE, 'w') as f:
                                 json.dump({"in_market": False, "last_exit_price": exit_p}, f)
                     
-                    # 2. ROT 긴급 매도 (UPRO와 동일한 층위에서 실행)
                     if rot_state.get('in_market'):
                         rem = []
                         for h in rot_state.get('holdings', []):
@@ -816,11 +843,9 @@ async def run_trading():
                         rot_state.update({"in_market": len(rem) > 0, "holdings": rem})
                         save_rotation_state(rot_state)
                         
-                    # 3. 텔레그램 알림
                     await tg_send(token_v, chat_id, "🚨 긴급 탈출 실행 완료")
                     
             else:
-                # 당일 5분봉 데이터가 5개 미만일 때 5일치 폴백을 막고 스킵합니다.
                 print("⚠️ 당일 5분봉 데이터 부족으로 긴급탈출 감지 스킵")
 
     elif current_hour in [7, 8, 9, 10]:
@@ -868,7 +893,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
 
 def run_dashboard():
     now_kst = dt.now(KST)
-    st.set_page_config(page_title="Unified Bot v1.7.1", layout="wide")
+    st.set_page_config(page_title="Unified Bot v1.7.3", layout="wide")
     
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty:
