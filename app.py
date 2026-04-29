@@ -1,7 +1,7 @@
 """
-Unified Trading Bot v1.7.3 (Masterpiece + Perfect Stop-loss)
-[Update] 클로드 코드 리뷰 반영: 손절 로직 실행 순서 버그 수정 및 고스트 포지션 방어 완벽 적용
-[Base] v1.7.1 structure (VIX Dynamic Allocation, KIS Robustness, Anti-SyntaxError formatting)
+Unified Trading Bot v1.7.6 (Masterpiece + Perfect Blacklist)
+[Update] 정상 나스닥 100 종목(CDNS 등) 블랙리스트 오지정 수정 및 FALLBACK_POOL 필터링 확실히 적용
+[Base] v1.7.3 structure (Ghost Stock Filter, Perfect Stop-loss, VIX Dynamic Allocation)
 """
 
 import os
@@ -45,6 +45,9 @@ VIX_ENTER_MAX         = 25.0
 SPY_6M_MIN            = 0.0
 ROTATION_STATE_FILE   = 'rotation_state.json'
 ROTATION_HISTORY_FILE = 'history_rotation.csv'
+
+# 💡 블랙리스트: 상장폐지/인수합병 등으로 데이터가 튀는 유령 주식 차단 (CDNS, FISV는 정상 상장이므로 제외)
+BLACKLIST = ['SNDK', 'CTXS', 'CERN'] 
 
 # 💡 ROT 개별 종목 손절 기준 설정 (-10%)
 ROT_STOP_LOSS_THRESHOLD = -0.10
@@ -205,12 +208,16 @@ def get_nasdaq_100_tickers():
         tables = pd.read_html(io.StringIO(res.text))
         for table in tables:
             if 'Ticker' in table.columns:
-                return [t.replace('.', '-') for t in table['Ticker'].tolist()]
+                raw_list = [t.replace('.', '-') for t in table['Ticker'].tolist()]
+                return [t for t in raw_list if t not in BLACKLIST]
             elif 'Symbol' in table.columns:
-                return [t.replace('.', '-') for t in table['Symbol'].tolist()]
-        return FALLBACK_POOL
+                raw_list = [t.replace('.', '-') for t in table['Symbol'].tolist()]
+                return [t for t in raw_list if t not in BLACKLIST]
+        # 💡 Fallback 호출 시에도 블랙리스트 필터링 적용
+        return [t for t in FALLBACK_POOL if t not in BLACKLIST]
     except Exception:
-        return FALLBACK_POOL
+        # 💡 예외 발생 시에도 동일하게 적용
+        return [t for t in FALLBACK_POOL if t not in BLACKLIST]
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
     if isinstance(ticker_or_list, str):
@@ -656,7 +663,7 @@ async def run_trading():
         rot_target = total_equity * rot_ratio
         
         msgs = [
-            f"🤖 <b>통합봇 v1.7.3 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
+            f"🤖 <b>통합봇 v1.7.6 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
             f"총자산: ${total_equity:,.2f}",
             f"📊 비중: UPRO {upro_ratio*100:.0f}% | ROT {rot_ratio*100:.0f}% (VIX: {vix_now:.1f})"
         ]
@@ -693,7 +700,6 @@ async def run_trading():
         action = r_sig['action']
         top2 = r_sig['top2']
         
-        # 💡 [v1.7.3] 1. 매수 분기점 정상화 (하락장 EXIT 무한루프 방지)
         if action in ["ENTER", "ROTATE", "KEEP"]:
             stop_lossed_tickers = []
             new_h = []
@@ -716,7 +722,6 @@ async def run_trading():
                             stop_lossed_tickers.append(h['ticker']) 
                             continue
                         else:
-                            # 💡 [v1.7.3] 2. 손절 주문 실패 시 고스트 포지션 방어 완벽 구현
                             msgs.append(f"⚠️ 손절 주문 실패, 상태 유지: {h['ticker']}")
                             new_h.append(h)
                             continue
@@ -742,7 +747,6 @@ async def run_trading():
                             
             time.sleep(2)
             
-            # 매수 루프는 ENTER나 ROTATE일 때, 또는 유지 중 빈자리가 생겼을 때만(단, 손절 종목 제외) 돕니다.
             if action in ["ENTER", "ROTATE"] and top2:
                 for t in top2:
                     if t in retained_tickers:
@@ -755,7 +759,6 @@ async def run_trading():
                         
                     p = trader.get_current_price(t)
                     if p > 0:
-                        # 💡 [v1.7.3] 3. 손절로 인한 슬롯 공백 발생 시 남은 예산을 채우지 않고 현금 유지 (의도된 동작)
                         qty = int(((rot_target * 0.95) / len(top2)) / p)
                     else:
                         qty = 0
@@ -893,7 +896,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
 
 def run_dashboard():
     now_kst = dt.now(KST)
-    st.set_page_config(page_title="Unified Bot v1.7.3", layout="wide")
+    st.set_page_config(page_title="Unified Bot v1.7.6", layout="wide")
     
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty:
