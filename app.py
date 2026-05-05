@@ -39,8 +39,9 @@ HISTORY_FILE  = 'history_trend.csv'
 FALLBACK_POOL = [
     'NVDA', 'TSLA', 'META', 'AAPL', 'MSFT', 'AMZN', 'GOOGL',
     'AVGO', 'COST', 'NFLX', 'AMD', 'ADBE', 'QCOM', 'INTC',
-    'INTU', 'AMAT', 'MU', 'LRCX', 'PANW', 'MRVL'
+    'INTU', 'AMAT', 'MU', 'LRCX', 'PANW', 'MRVL', 'STX'
 ]
+TICKER_CACHE_FILE = 'nasdaq100_tickers_cache.json'
 TOP_N                 = 2
 VIX_ENTER_MAX         = 25.0
 SPY_6M_MIN            = 0.0
@@ -210,13 +211,27 @@ def get_nasdaq_100_tickers():
         for table in tables:
             if 'Ticker' in table.columns:
                 raw_list = [t.replace('.', '-') for t in table['Ticker'].tolist()]
-                return [t for t in raw_list if t not in BLACKLIST]
+                result = [t for t in raw_list if t not in BLACKLIST]
             elif 'Symbol' in table.columns:
                 raw_list = [t.replace('.', '-') for t in table['Symbol'].tolist()]
-                return [t for t in raw_list if t not in BLACKLIST]
-        return [t for t in FALLBACK_POOL if t not in BLACKLIST]
+                result = [t for t in raw_list if t not in BLACKLIST]
+            else:
+                continue
+            with open(TICKER_CACHE_FILE, 'w') as f:
+                json.dump(result, f)
+            return result
     except Exception:
-        return [t for t in FALLBACK_POOL if t not in BLACKLIST]
+        pass
+    # 스크래핑 실패 시 캐시 → FALLBACK_POOL 순으로 사용
+    if os.path.exists(TICKER_CACHE_FILE):
+        try:
+            with open(TICKER_CACHE_FILE, 'r') as f:
+                cached = json.load(f)
+            if cached:
+                return [t for t in cached if t not in BLACKLIST]
+        except Exception:
+            pass
+    return [t for t in FALLBACK_POOL if t not in BLACKLIST]
 
 def _yf_download_with_retry(ticker_or_list, period='2y', interval='1d', max_retry=3):
     if isinstance(ticker_or_list, str):
@@ -936,17 +951,24 @@ def run_dashboard():
         return
 
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
-    
+
     vix_now = float(vix_close.iloc[-1])
     upro_ratio = get_dynamic_upro_ratio(vix_now)
     rot_ratio = 1.0 - upro_ratio
-    
+
+    rot_state = load_rotation_state()
+
     if total_equity > 10:
         actual_per_stock_budget = (total_equity * rot_ratio * 0.95) / TOP_N
     else:
-        actual_per_stock_budget = 99999
-    
-    rot_state = load_rotation_state()
+        # KIS API 실패 시 rot_state 보유종목 + yfinance 시세로 총자산 추정
+        estimated_total = sum(
+            float(close_all[h['ticker']].iloc[-1]) * h.get('qty', 1)
+            for h in rot_state.get('holdings', [])
+            if h['ticker'] in close_all and not close_all[h['ticker']].empty
+        )
+        actual_per_stock_budget = (estimated_total * rot_ratio * 0.95) / TOP_N if estimated_total > 10 else 99999
+
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
     r_sig = get_rotation_signal(spy_ohlc['Close'], vix_close, close_all, rot_state, actual_per_stock_budget)
     
