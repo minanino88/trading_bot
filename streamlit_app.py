@@ -74,6 +74,7 @@ class KIS_Trader:
         self.cano         = os.getenv('KIS_CANO', '').strip()
         self.acnt_prdt_cd = os.getenv('KIS_ACNT_PRDT_CD', '01').strip()
         self.token        = None
+        self.token_expires_at = 0.0
         self._set_token()
 
     def _get_exch_info(self, ticker):
@@ -92,12 +93,20 @@ class KIS_Trader:
             data = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
             res = requests.post(url, headers={"content-type": "application/json"}, data=json.dumps(data)).json()
             self.token = res.get('access_token')
+            expires_in = int(res.get('expires_in', 21600))
+            self.token_expires_at = time.time() + expires_in
             if not self.token:
                 print(f"🚨 [토큰 발급 실패 사유] KIS 서버 응답: {json.dumps(res, ensure_ascii=False)}")
         except Exception as e:
             print(f"🚨 [토큰 통신 자체 에러]: {e}")
 
+    def _ensure_token(self):
+        if time.time() < self.token_expires_at - 300:
+            return
+        self._set_token()
+
     def _headers(self, tr_id):
+        self._ensure_token()
         return {
             "Content-Type": "application/json",
             "authorization": f"Bearer {self.token}",
@@ -397,6 +406,8 @@ def get_upro_signal(spy_close, monthly, vix_close):
 
 def get_rotation_signal(spy_close, vix_close, close_all, rot_state, per_stock_budget):
     try:
+        if len(spy_close) < 126 or len(vix_close) < 2:
+            return {"action": "WAIT", "top2": [], "scores": {}, "vix_now": 0, "spy_6m": 0}
         spy_6m = float(spy_close.iloc[-1]/spy_close.iloc[-126]-1)
         vix_now = float(vix_close.iloc[-1])
         
@@ -736,8 +747,8 @@ async def run_trading():
                     if h['ticker'] in top2:
                         retained_tickers.append(h['ticker'])
                         
-            time.sleep(2)
-            
+            await asyncio.sleep(2)
+
             for t in top2:
                 if t in retained_tickers:
                     msgs.append(f"🔄 ROT 유지: {t} (추가 매수 생략)")
@@ -745,7 +756,7 @@ async def run_trading():
                     
                 p = trader.get_current_price(t)
                 if p > 0:
-                    qty = int(((rot_target * 0.95) / len(top2)) / p)
+                    qty = int(((rot_target * 0.95) / max(len(top2), 1)) / p)
                 else:
                     qty = 0
                     
