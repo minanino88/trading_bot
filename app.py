@@ -27,6 +27,30 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
+def _load_gcp_secrets():
+    try:
+        from google.cloud import secretmanager
+        client = secretmanager.SecretManagerServiceClient()
+        project = "cosmic-reserve-239719"
+        secret_map = {
+            'KIS_APPKEY':        'KIS_APPKEY',
+            'KIS_SECRET':        'KIS_SECRET',
+            'KIS_CANO':          'KIS_CANO',
+            'KIS_ACNT_PRDT_CD':  'KIS_ACNT_PRDT_CD',
+            'TELEGRAM_TOKEN':    'TELEGRAM_TOKEN',
+            'TELEGRAM_CHAT_ID':  'CHAT_ID',
+            'GEMINI_API_KEY':    'GEMINI_API_KEY',
+        }
+        for secret_name, env_name in secret_map.items():
+            if not os.getenv(env_name):
+                name = f"projects/{project}/secrets/{secret_name}/versions/latest"
+                res = client.access_secret_version(request={"name": name})
+                os.environ[env_name] = res.payload.data.decode("UTF-8")
+    except Exception as e:
+        print(f"[Secret Manager] env 변수 사용: {e}")
+
+_load_gcp_secrets()
+
 # ==============================================================
 # 1. 설정
 # ==============================================================
