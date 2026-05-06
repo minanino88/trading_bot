@@ -1,8 +1,8 @@
 
 """
-Unified Trading Bot v1.7.9 (Masterpiece + Pre-Exit AI Analysis)
-[Update] 하락장 청산(EXIT) 시, 매도 전 포트폴리오 상태를 캡처하여 AI가 청산 이유를 분석하도록 수정
-[Base] v1.7.8 structure (Safe AI Dashboard, Portfolio AI Analysis, Perfect Blacklist)
+Unified Trading Bot v1.8.0 (VIX Ratio Fix + Trailing Stop + UPRO EXIT Co-Liquidation)
+[v1.8.0] VIX 비중 로직 수정(튜플 반환), ROT 트레일링 스탑(-15%), UPRO EXIT 시 ROT 동반 청산
+[Base] v1.7.9 structure (Masterpiece + Pre-Exit AI Analysis)
 """
 
 import os
@@ -77,19 +77,15 @@ BLACKLIST = ['SNDK', 'CTXS', 'CERN']
 
 # 💡 ROT 개별 종목 손절 기준 설정 (-10%)
 ROT_STOP_LOSS_THRESHOLD = -0.10
+ROT_TRAILING_STOP = -0.15  # [v1.8.0] 고점 대비 -15% 트레일링 손절
 
-# 💡 VIX 기반 동적 비중 계산 함수
+# [v1.8.0] VIX 기반 동적 비중 계산 함수 — (upro_ratio, rot_ratio) 튜플 반환
+# VIX≥25 구간은 ROT 진입 조건(VIX<25) 밖이므로 ROT 비중 0으로 수정
 def get_dynamic_upro_ratio(vix_now):
-    if vix_now < 15:
-        return 0.65
-    elif vix_now < 20:
-        return 0.55
-    elif vix_now < 25:
-        return 0.45
-    elif vix_now < 30:
-        return 0.30
-    else:
-        return 0.15
+    if vix_now < 15:   return (0.65, 0.35)
+    elif vix_now < 20: return (0.55, 0.45)
+    elif vix_now < 25: return (0.45, 0.55)
+    else:              return (0.30, 0.0)  # VIX≥25: ROT=0, 나머지 현금
 
 # ==============================================================
 # 2. KIS API 
@@ -721,9 +717,8 @@ async def run_trading():
     total_equity = bal + upro_value + rot_value
     
     vix_now = float(vix_close.iloc[-1])
-    upro_ratio = get_dynamic_upro_ratio(vix_now)
-    rot_ratio = 1.0 - upro_ratio
-    
+    upro_ratio, rot_ratio = get_dynamic_upro_ratio(vix_now)  # [v1.8.0]
+
     per_stock_budget = (total_equity * rot_ratio * 0.95) / TOP_N
     
     u_sig, u_re, u_p, u_st = get_upro_signal(spy_ohlc['Close'], monthly, vix_close)
@@ -734,7 +729,7 @@ async def run_trading():
         rot_target = total_equity * rot_ratio
         
         msgs = [
-            f"🤖 <b>통합봇 v1.7.9 [{now_kst.strftime('%m/%d %H:%M')}]</b>", 
+            f"🤖 <b>통합봇 v1.8.0 [{now_kst.strftime('%m/%d %H:%M')}]</b>",  # [v1.8.0]
             f"총자산: ${total_equity:,.2f}",
             f"📊 비중: UPRO {upro_ratio*100:.0f}% | ROT {rot_ratio*100:.0f}% (VIX: {vix_now:.1f})"
         ]
@@ -764,9 +759,29 @@ async def run_trading():
                     msgs.append(f"✅ UPRO 매도: {upro_qty}주")
                     with open(STATE_FILE, 'w') as f:
                         json.dump({"in_market": False, "last_exit_price": u_p}, f)
-                    
+
                     hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Qty": upro_qty, "Price": cur_p_upro}]
                     pd.DataFrame(hist_data).to_csv(HISTORY_FILE, mode='a', header=not os.path.exists(HISTORY_FILE), index=False)
+
+                    # [v1.8.0] UPRO 긴급 청산 시 ROT 동반 청산
+                    if rot_state.get('in_market'):
+                        msgs.append("⚡ UPRO 긴급청산 → ROT 동반 청산")
+                        for h in rot_state.get('holdings', []):
+                            q_r = trader.get_holdings(h['ticker'])
+                            if q_r > 0:
+                                order_res_r = trader.send_order(h['ticker'], q_r, "SELL")
+                                if order_res_r.get('rt_cd') == '0':
+                                    cp_r = trader.get_current_price(h['ticker'])
+                                    ret_r = (cp_r - h.get('entry_price', cp_r)) / max(h.get('entry_price', cp_r), 1) * 100
+                                    hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q_r, "Price": cp_r, "RetPct": round(ret_r, 2)}]
+                                    pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
+                                    msgs.append(f"✅ ROT 동반청산: {h['ticker']} {q_r}주")
+                                else:
+                                    msgs.append(f"⚠️ ROT 동반청산 실패: {h['ticker']}")
+                            elif q_r == -1:
+                                msgs.append(f"⚠️ ROT {h['ticker']} 조회 오류")
+                        rot_state.update({"in_market": False, "holdings": []})
+                        save_rotation_state(rot_state)
         
         action = r_sig['action']
         top2 = r_sig['top2']
@@ -784,16 +799,29 @@ async def run_trading():
                 if q > 0:
                     curr_p = trader.get_current_price(h['ticker'])
                     entry_p = h.get('entry_price', curr_p)
-                    
-                    perf = (curr_p - entry_p) / entry_p if entry_p > 0 else 0
-                    
-                    if perf <= ROT_STOP_LOSS_THRESHOLD:
+                    high_water = h.get('high_water', entry_p)  # [v1.8.0] 없으면 entry_price로 보정
+
+                    # [v1.8.0] 고점 갱신
+                    if curr_p > high_water:
+                        high_water = curr_p
+                        h['high_water'] = high_water
+
+                    draw = (curr_p / entry_p) - 1 if entry_p > 0 else 0
+                    trail = (curr_p / high_water) - 1 if high_water > 0 else 0
+
+                    stop_by_entry = draw <= ROT_STOP_LOSS_THRESHOLD
+                    stop_by_trail = trail <= ROT_TRAILING_STOP  # [v1.8.0]
+
+                    if stop_by_entry or stop_by_trail:
                         order_res = trader.send_order(h['ticker'], q, "SELL")
                         if order_res.get('rt_cd') == '0':
-                            msgs.append(f"🛑 ROT 손절 실행: {h['ticker']} ({perf*100:.1f}%)")
-                            hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": curr_p, "RetPct": round(perf*100, 2)}]
+                            if stop_by_trail:
+                                msgs.append(f"🛑 ROT 손절(트레일): {h['ticker']} (고점대비 {trail*100:.1f}%)")
+                            else:
+                                msgs.append(f"🛑 ROT 손절(진입가): {h['ticker']} ({draw*100:.1f}%)")
+                            hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "SELL", "Ticker": h['ticker'], "Qty": q, "Price": curr_p, "RetPct": round(draw*100, 2)}]
                             pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
-                            stop_lossed_tickers.append(h['ticker']) 
+                            stop_lossed_tickers.append(h['ticker'])
                             continue
                         else:
                             msgs.append(f"⚠️ 손절 주문 실패, 상태 유지: {h['ticker']}")
@@ -840,7 +868,7 @@ async def run_trading():
                     if qty >= 1:
                         order_res = trader.send_order(t, qty, "BUY")
                         if order_res.get('rt_cd') == '0':
-                            new_h.append({"ticker": t, "qty": qty, "entry_price": p})
+                            new_h.append({"ticker": t, "qty": qty, "entry_price": p, "high_water": p})  # [v1.8.0]
                             hist_data = [{"Date": now_kst.strftime("%Y-%m-%d %H:%M"), "Action": "BUY", "Ticker": t, "Qty": qty, "Price": p, "RetPct": 0}]
                             pd.DataFrame(hist_data).to_csv(ROTATION_HISTORY_FILE, mode='a', header=not os.path.exists(ROTATION_HISTORY_FILE), index=False)
                             msgs.append(f"✅ ROT 매수 성공: {t} {qty}주")
@@ -978,7 +1006,7 @@ def plot_perf_chart(perf_data, name, color, spy_series):
 
 def run_dashboard():
     now_kst = dt.now(KST)
-    st.set_page_config(page_title="Unified Bot v1.7.9", layout="wide")
+    st.set_page_config(page_title="Unified Bot v1.8.0", layout="wide")  # [v1.8.0]
     
     spy_ohlc, monthly, vix_close, close_all, data_msg = get_market_data()
     if spy_ohlc.empty:
@@ -988,8 +1016,7 @@ def run_dashboard():
     total_equity, bal, upro_qty, upro_value, rot_value = get_cached_portfolio_equity()
 
     vix_now = float(vix_close.iloc[-1])
-    upro_ratio = get_dynamic_upro_ratio(vix_now)
-    rot_ratio = 1.0 - upro_ratio
+    upro_ratio, rot_ratio = get_dynamic_upro_ratio(vix_now)  # [v1.8.0]
 
     rot_state = load_rotation_state()
 

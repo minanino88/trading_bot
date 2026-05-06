@@ -1,6 +1,6 @@
 # 통합 트레이딩 봇 — 투자 동작 스펙
 
-버전: v1.7.9
+버전: v1.8.0
 
 두 개의 독립 전략을 동시에 운용합니다.
 
@@ -14,12 +14,11 @@
 ## 자산 배분 — VIX 기반 동적 비중
 
 ```python
-# app.py > get_dynamic_upro_ratio()
+# app.py > get_dynamic_upro_ratio()  → (upro_ratio, rot_ratio) 튜플 반환
 VIX < 15  → UPRO 65% / ROT 35%
 VIX 15~20 → UPRO 55% / ROT 45%
 VIX 20~25 → UPRO 45% / ROT 55%
-VIX 25~30 → UPRO 30% / ROT 70%
-VIX ≥ 30  → UPRO 15% / ROT 85%
+VIX ≥ 25  → UPRO 30% / ROT 0%   ← [v1.8.0] ROT 진입 조건(VIX<25) 밖이므로 ROT 비중 0, 나머지 현금
 ```
 
 ---
@@ -83,8 +82,11 @@ VIX < 25
 ### 개별 종목 손절
 
 ```
-손절 기준: -10%
+진입가 기준 손절: -10%   → 🛑 ROT 손절(진입가)
+트레일링 스탑:   고점 대비 -15%  → 🛑 ROT 손절(트레일)  ← [v1.8.0]
+둘 중 하나라도 충족 시 즉시 손절
 손절 시 당일 재진입 금지
+holdings에 high_water 필드 저장 (매수 시 entry_price 동일 값으로 초기화)
 ```
 
 ---
@@ -110,8 +112,21 @@ VIX < 25
 
 ---
 
+## UPRO EXIT 시 ROT 동반 청산 [v1.8.0]
+
+UPRO 매도 성공 직후 `rot_state.in_market == True`이면:
+
+```
+⚡ UPRO 긴급청산 → ROT 동반 청산 메시지 전송
+ROT 보유 전 종목 전량 매도 (기존 ROT EXIT 로직과 동일)
+rot_state → {"in_market": false, "holdings": []} 업데이트
+```
+
+---
+
 ## AI 분석 (Gemini)
 
 - 매 매매 실행 후 텔레그램으로 포트폴리오 상태 요약 전송
-- **청산(EXIT) 시에는 청산 전 상태 기준**으로 분석 실행 (v1.7.9)
+- **ROT EXIT 시에는 청산 전 상태 기준**으로 분석 실행 (v1.7.9)
+- **UPRO EXIT + ROT 동반 청산 시에는 모든 청산 완료 후** 분석 실행 (v1.8.0)
 - 모델 우선순위: `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `gemini-2.0-flash`
